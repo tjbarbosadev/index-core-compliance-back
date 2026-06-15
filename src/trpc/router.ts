@@ -1,0 +1,25 @@
+import { router } from '../trpc/procedures.js';
+import { healthRouter } from '../routers/health.router.js';
+import { authRouter } from '../routers/auth.router.js';
+import { menuRouter, groupsRouter, usersRouter } from '../routers/admin.router.js';
+import { fundsRouter } from '../routers/funds.router.js';
+import { documentsRouter } from '../routers/documents.router.js';
+import { onboardingRouter, cedenteOnboardingRouter } from '../routers/onboarding.router.js';
+import { cotistasRouter } from '../routers/cotistas.router.js';
+import { auditRouter } from '../routers/audit.router.js';
+
+export const appRouter = router({
+  health: healthRouter,
+  auth: authRouter,
+  menu: menuRouter,
+  groups: groupsRouter,
+  users: usersRouter,
+  funds: fundsRouter,
+  documents: documentsRouter,
+  onboarding: onboardingRouter,
+  cedenteOnboarding: cedenteOnboardingRouter,
+  cotistas: cotistasRouter,
+  audit: auditRouter,
+});
+
+export type AppRouter = typeof appRouter;

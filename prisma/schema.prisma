@@ -1,0 +1,651 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ============================================================================
+// ENUMS
+// ============================================================================
+
+enum UserStatus {
+  active
+  inactive
+  suspended
+
+  @@map("user_status")
+}
+
+enum PartyType {
+  pf
+  pj
+
+  @@map("party_type")
+}
+
+enum PartyStatus {
+  pendente
+  aprovado
+  rejeitado
+  expirado
+  revalidado
+
+  @@map("party_status")
+}
+
+enum RiskLevel {
+  baixo
+  medio
+  alto
+  muito_alto
+
+  @@map("risk_level")
+}
+
+enum DocumentType {
+  rg
+  cpf
+  cnh
+  comprovante_residencia
+  irpf
+  extrato_bancario
+  contrato_social
+  alteracao_contratual
+  procuracao
+  declaracao
+  balanco_patrimonial
+  minuta_cessao
+  outro
+
+  @@map("document_type")
+}
+
+enum DocumentStatus {
+  pendente
+  em_analise
+  aprovado
+  rejeitado
+
+  @@map("document_status")
+}
+
+enum ValidationMethod {
+  manual
+  ocr
+  facial
+  api
+
+  @@map("validation_method")
+}
+
+enum FundModality {
+  fidc
+  fii
+  fia
+  fim
+  fi_infra
+  fip
+  fi_debentures
+  fiagro
+  fi_rf
+  fi_cambio
+
+  @@map("fund_modality")
+}
+
+enum FundStatus {
+  ativo
+  inativo
+  liquidacao
+  encerrado
+
+  @@map("fund_status")
+}
+
+enum QuotaType {
+  senior
+  mezanino
+  subordinada
+  unica
+
+  @@map("quota_type")
+}
+
+enum AssetClass {
+  direito_creditorio
+  acoes
+  derivativos
+  renda_fixa
+  cotas_fundo_investimento
+  imoveis
+  outro
+
+  @@map("asset_class")
+}
+
+enum ComplianceStatus {
+  conforme
+  alerta
+  violacao
+
+  @@map("compliance_status")
+}
+
+enum OnboardingStatus {
+  em_andamento
+  aprovado
+  rejeitado
+  expirado
+
+  @@map("onboarding_status")
+}
+
+enum OnboardingKind {
+  cotista
+  cedente
+
+  @@map("onboarding_kind")
+}
+
+enum StepStatus {
+  pendente
+  em_andamento
+  concluido
+  rejeitado
+
+  @@map("step_status")
+}
+
+enum InvestorProfile {
+  conservador
+  moderado
+  arrojado
+  agressivo
+
+  @@map("investor_profile")
+}
+
+enum AlertType {
+  pagamento_picado
+  transferencia_anomala
+  retirada_acelerada
+  cadastro_expirado
+  documento_invalido
+  lista_restritiva
+  violacao_alocacao
+  pep
+  outro
+
+  @@map("alert_type")
+}
+
+enum AlertSeverity {
+  baixa
+  media
+  alta
+  critica
+
+  @@map("alert_severity")
+}
+
+enum AlertStatus {
+  novo
+  investigando
+  reportado_coaf
+  arquivado
+
+  @@map("alert_status")
+}
+
+enum AuditResult {
+  sucesso
+  erro
+  aviso
+
+  @@map("audit_result")
+}
+
+// ============================================================================
+// IDENTITY
+// ============================================================================
+
+model User {
+  id          String     @id @default(uuid()) @db.Uuid
+  email       String     @unique @db.VarChar(255)
+  name        String     @db.VarChar(255)
+  isAdmin     Boolean    @default(false) @map("is_admin")
+  mfaRequired Boolean    @default(false) @map("mfa_required")
+  mfaEnabled  Boolean    @default(false) @map("mfa_enabled")
+  mfaSecret   String?    @map("mfa_secret") @db.VarChar(255)
+  status      UserStatus @default(active)
+  createdAt   DateTime   @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt   DateTime   @updatedAt @map("updated_at") @db.Timestamptz
+
+  sessions            UserSession[]
+  userGroups          UserGroup[]
+  permissionOverrides UserPermissionOverride[]
+  auditLogs           AuditLog[]
+  documentsUploaded   Document[]               @relation("DocumentUploader")
+  documentsValidated  Document[]               @relation("DocumentValidator")
+
+  @@map("users")
+}
+
+model UserSession {
+  id        String    @id @default(uuid()) @db.Uuid
+  userId    String    @map("user_id") @db.Uuid
+  tokenHash String    @map("token_hash") @db.VarChar(255)
+  ipAddress String?   @map("ip_address")
+  userAgent String?   @map("user_agent")
+  expiresAt DateTime  @map("expires_at") @db.Timestamptz
+  revokedAt DateTime? @map("revoked_at") @db.Timestamptz
+  createdAt DateTime  @default(now()) @map("created_at") @db.Timestamptz
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([expiresAt])
+  @@map("user_sessions")
+}
+
+model PermissionGroup {
+  id          String   @id @default(uuid()) @db.Uuid
+  name        String   @unique @db.VarChar(100)
+  description String?
+  mfaRequired Boolean  @default(false) @map("mfa_required")
+  isSystem    Boolean  @default(false) @map("is_system")
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt   DateTime @updatedAt @map("updated_at") @db.Timestamptz
+
+  groupPermissions GroupPermission[]
+  userGroups       UserGroup[]
+
+  @@map("permission_groups")
+}
+
+model Permission {
+  id          String   @id @default(uuid()) @db.Uuid
+  key         String   @unique @db.VarChar(100)
+  description String?
+  module      String   @db.VarChar(50)
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz
+
+  groupPermissions GroupPermission[]
+  menuItems        MenuItem[]
+  userOverrides    UserPermissionOverride[]
+
+  @@map("permissions")
+}
+
+model MenuItem {
+  id                   String  @id @default(uuid()) @db.Uuid
+  key                  String  @unique @db.VarChar(100)
+  label                String  @db.VarChar(100)
+  route                String  @db.VarChar(255)
+  icon                 String? @db.VarChar(50)
+  parentId             String? @map("parent_id") @db.Uuid
+  sortOrder            Int     @default(0) @map("sort_order") @db.SmallInt
+  requiredPermissionId String  @map("required_permission_id") @db.Uuid
+  active               Boolean @default(true)
+
+  requiredPermission Permission @relation(fields: [requiredPermissionId], references: [id])
+  parent             MenuItem?  @relation("MenuHierarchy", fields: [parentId], references: [id])
+  children           MenuItem[] @relation("MenuHierarchy")
+
+  @@map("menu_items")
+}
+
+model GroupPermission {
+  id           String  @id @default(uuid()) @db.Uuid
+  groupId      String  @map("group_id") @db.Uuid
+  permissionId String  @map("permission_id") @db.Uuid
+  granted      Boolean @default(true)
+
+  group      PermissionGroup @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  permission Permission      @relation(fields: [permissionId], references: [id], onDelete: Cascade)
+
+  @@unique([groupId, permissionId])
+  @@map("group_permissions")
+}
+
+model UserGroup {
+  id         String   @id @default(uuid()) @db.Uuid
+  userId     String   @map("user_id") @db.Uuid
+  groupId    String   @map("group_id") @db.Uuid
+  assignedAt DateTime @default(now()) @map("assigned_at") @db.Timestamptz
+  assignedBy String?  @map("assigned_by") @db.Uuid
+
+  user  User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  group PermissionGroup @relation(fields: [groupId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, groupId])
+  @@index([userId])
+  @@map("user_groups")
+}
+
+model UserPermissionOverride {
+  id           String   @id @default(uuid()) @db.Uuid
+  userId       String   @map("user_id") @db.Uuid
+  permissionId String   @map("permission_id") @db.Uuid
+  granted      Boolean
+  createdBy    String?  @map("created_by") @db.Uuid
+  createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz
+
+  user       User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  permission Permission @relation(fields: [permissionId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, permissionId])
+  @@map("user_permission_overrides")
+}
+
+// ============================================================================
+// PARTIES & CADASTROS
+// ============================================================================
+
+model Party {
+  id         String      @id @default(uuid()) @db.Uuid
+  type       PartyType
+  cpfCnpj    String      @unique @map("cpf_cnpj") @db.VarChar(18)
+  legalName  String      @map("legal_name") @db.VarChar(500)
+  status     PartyStatus @default(pendente)
+  riskLevel  RiskLevel   @default(baixo) @map("risk_level")
+  pepFlag    Boolean     @default(false) @map("pep_flag")
+  approvedAt DateTime?   @map("approved_at") @db.Timestamptz
+  approvedBy String?     @map("approved_by") @db.Uuid
+  expiresAt  DateTime?   @map("expires_at") @db.Timestamptz
+  createdAt  DateTime    @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt  DateTime    @updatedAt @map("updated_at") @db.Timestamptz
+
+  contacts           PartyContact[]
+  bankAccounts       PartyBankAccount[]
+  beneficialOwners   PartyBeneficialOwner[] @relation("PartyOwners")
+  cotista            Cotista?
+  cedente            Cedente?
+  documents          Document[]
+  partyFundLinks     PartyFundLink[]
+  onboardingProcesses OnboardingProcess[]
+
+  @@index([status, expiresAt])
+  @@map("parties")
+}
+
+model PartyContact {
+  id          String   @id @default(uuid()) @db.Uuid
+  partyId     String   @map("party_id") @db.Uuid
+  email       String?  @db.VarChar(255)
+  phone       String?  @db.VarChar(30)
+  addressJson Json?    @map("address_json")
+  isPrimary   Boolean  @default(true) @map("is_primary")
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz
+
+  party Party @relation(fields: [partyId], references: [id], onDelete: Cascade)
+
+  @@index([partyId])
+  @@map("party_contacts")
+}
+
+model PartyBankAccount {
+  id          String    @id @default(uuid()) @db.Uuid
+  partyId     String    @map("party_id") @db.Uuid
+  bankCode    String    @map("bank_code") @db.VarChar(10)
+  branch      String    @db.VarChar(10)
+  account     String    @db.VarChar(20)
+  accountType String?   @default("corrente") @map("account_type") @db.VarChar(20)
+  isPrimary   Boolean   @default(false) @map("is_primary")
+  approvedBy  String?   @map("approved_by") @db.Uuid
+  approvedAt  DateTime? @map("approved_at") @db.Timestamptz
+  createdAt   DateTime  @default(now()) @map("created_at") @db.Timestamptz
+
+  party Party @relation(fields: [partyId], references: [id], onDelete: Cascade)
+
+  @@unique([partyId, bankCode, branch, account])
+  @@index([partyId])
+  @@map("party_bank_accounts")
+}
+
+model PartyBeneficialOwner {
+  id           String   @id @default(uuid()) @db.Uuid
+  partyId      String   @map("party_id") @db.Uuid
+  ownerName    String   @map("owner_name") @db.VarChar(255)
+  ownerCpfCnpj String   @map("owner_cpf_cnpj") @db.VarChar(18)
+  ownershipPct Decimal  @map("ownership_pct") @db.Decimal(5, 2)
+  pepFlag      Boolean  @default(false) @map("pep_flag")
+  createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz
+
+  party Party @relation("PartyOwners", fields: [partyId], references: [id], onDelete: Cascade)
+
+  @@map("party_beneficial_owners")
+}
+
+model Cotista {
+  id                String           @id @default(uuid()) @db.Uuid
+  partyId           String           @unique @map("party_id") @db.Uuid
+  investorProfile   InvestorProfile? @map("investor_profile")
+  suitabilityResult InvestorProfile? @map("suitability_result")
+  createdAt         DateTime         @default(now()) @map("created_at") @db.Timestamptz
+
+  party Party @relation(fields: [partyId], references: [id], onDelete: Cascade)
+
+  @@map("cotistas")
+}
+
+model Cedente {
+  id                    String    @id @default(uuid()) @db.Uuid
+  partyId               String    @unique @map("party_id") @db.Uuid
+  juntaValidationStatus String    @default("pendente") @map("junta_validation_status") @db.VarChar(50)
+  lastJuntaCheckAt      DateTime? @map("last_junta_check_at") @db.Timestamptz
+  createdAt             DateTime  @default(now()) @map("created_at") @db.Timestamptz
+
+  party Party @relation(fields: [partyId], references: [id], onDelete: Cascade)
+
+  @@map("cedentes")
+}
+
+// ============================================================================
+// FUNDS
+// ============================================================================
+
+model Fund {
+  id                   String       @id @default(uuid()) @db.Uuid
+  name                 String       @db.VarChar(500)
+  cnpj                 String       @unique @db.VarChar(18)
+  cvmCode              String?      @map("cvm_code") @db.VarChar(50)
+  modality             FundModality
+  targetAudience       String?      @map("target_audience") @db.VarChar(100)
+  status               FundStatus   @default(ativo)
+  regulatoryLimitsJson Json         @default("{}") @map("regulatory_limits_json")
+  createdAt            DateTime     @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt            DateTime     @updatedAt @map("updated_at") @db.Timestamptz
+
+  netWorthHistory     FundNetWorthHistory[]
+  partyFundLinks      PartyFundLink[]
+  onboardingProcesses OnboardingProcess[]
+
+  @@map("funds")
+}
+
+model FundNetWorthHistory {
+  id            String   @id @default(uuid()) @db.Uuid
+  fundId        String   @map("fund_id") @db.Uuid
+  referenceDate DateTime @map("reference_date") @db.Date
+  netWorth      Decimal  @map("net_worth") @db.Decimal(18, 2)
+  source        String?  @db.VarChar(100)
+  createdAt     DateTime @default(now()) @map("created_at") @db.Timestamptz
+
+  fund Fund @relation(fields: [fundId], references: [id], onDelete: Cascade)
+
+  @@unique([fundId, referenceDate])
+  @@map("fund_net_worth_history")
+}
+
+model ComplianceRule {
+  id                    String       @id @default(uuid()) @db.Uuid
+  modality              FundModality
+  assetClass            AssetClass   @map("asset_class")
+  minPercentage         Decimal      @map("min_percentage") @db.Decimal(5, 2)
+  warningThresholdPct   Decimal      @default(90) @map("warning_threshold_pct") @db.Decimal(5, 2)
+
+  @@unique([modality, assetClass])
+  @@map("compliance_rules")
+}
+
+model PartyFundLink {
+  id          String    @id @default(uuid()) @db.Uuid
+  partyId     String    @map("party_id") @db.Uuid
+  fundId      String    @map("fund_id") @db.Uuid
+  quotaType   QuotaType @default(unica) @map("quota_type")
+  quotaAmount Decimal   @default(0) @map("quota_amount") @db.Decimal(18, 4)
+  linkedAt    DateTime  @default(now()) @map("linked_at") @db.Timestamptz
+
+  party Party @relation(fields: [partyId], references: [id], onDelete: Cascade)
+  fund  Fund  @relation(fields: [fundId], references: [id], onDelete: Cascade)
+
+  @@unique([partyId, fundId, quotaType])
+  @@index([fundId])
+  @@map("party_fund_links")
+}
+
+// ============================================================================
+// DOCUMENTS
+// ============================================================================
+
+model Document {
+  id              String         @id @default(uuid()) @db.Uuid
+  partyId         String         @map("party_id") @db.Uuid
+  type            DocumentType
+  fileName        String         @default("") @map("file_name") @db.VarChar(255)
+  fileUri         String         @map("file_uri")
+  hashSha256      String         @default("") @map("hash_sha256") @db.VarChar(64)
+  mimeType        String?        @map("mime_type") @db.VarChar(100)
+  sizeBytes       Int?           @map("size_bytes")
+  status          DocumentStatus @default(pendente)
+  uploadedById    String?        @map("uploaded_by") @db.Uuid
+  validatedById   String?        @map("validated_by") @db.Uuid
+  validatedAt     DateTime?      @map("validated_at") @db.Timestamptz
+  rejectionReason String?        @map("rejection_reason")
+  createdAt       DateTime       @default(now()) @map("created_at") @db.Timestamptz
+
+  party       Party  @relation(fields: [partyId], references: [id], onDelete: Cascade)
+  uploadedBy  User?  @relation("DocumentUploader", fields: [uploadedById], references: [id])
+  validatedBy User?  @relation("DocumentValidator", fields: [validatedById], references: [id])
+  validations DocumentValidation[]
+
+  @@index([partyId])
+  @@index([status])
+  @@map("documents")
+}
+
+model DocumentValidation {
+  id           String           @id @default(uuid()) @db.Uuid
+  documentId   String           @map("document_id") @db.Uuid
+  validatorId  String?          @map("validator_id") @db.Uuid
+  method       ValidationMethod @default(manual)
+  result       String           @db.VarChar(50)
+  metadataJson Json?            @default("{}") @map("metadata_json")
+  createdAt    DateTime         @default(now()) @map("created_at") @db.Timestamptz
+
+  document Document @relation(fields: [documentId], references: [id], onDelete: Cascade)
+
+  @@map("document_validations")
+}
+
+// ============================================================================
+// ONBOARDING
+// ============================================================================
+
+model OnboardingProcess {
+  id          String           @id @default(uuid()) @db.Uuid
+  kind        OnboardingKind   @default(cotista)
+  partyId     String           @map("party_id") @db.Uuid
+  fundId      String           @map("fund_id") @db.Uuid
+  quotaType   QuotaType?       @map("quota_type")
+  currentStep Int              @default(1) @map("current_step") @db.SmallInt
+  status      OnboardingStatus @default(em_andamento)
+  stepDataJson Json?           @default("{}") @map("step_data_json")
+  startedAt   DateTime         @default(now()) @map("started_at") @db.Timestamptz
+  expiresAt   DateTime?        @map("expires_at") @db.Timestamptz
+  completedAt DateTime?        @map("completed_at") @db.Timestamptz
+
+  party               Party                @relation(fields: [partyId], references: [id])
+  fund                Fund                 @relation(fields: [fundId], references: [id])
+  steps               OnboardingStep[]
+  suitabilityResponse SuitabilityResponse?
+
+  @@index([status])
+  @@index([kind, status])
+  @@map("onboarding_processes")
+}
+
+model OnboardingStep {
+  id          String     @id @default(uuid()) @db.Uuid
+  processId   String     @map("process_id") @db.Uuid
+  stepNumber  Int        @map("step_number") @db.SmallInt
+  status      StepStatus @default(pendente)
+  completedBy String?    @map("completed_by") @db.Uuid
+  completedAt DateTime?  @map("completed_at") @db.Timestamptz
+  notes       String?
+
+  process OnboardingProcess @relation(fields: [processId], references: [id], onDelete: Cascade)
+
+  @@unique([processId, stepNumber])
+  @@map("onboarding_steps")
+}
+
+model SuitabilityResponse {
+  id                String          @id @default(uuid()) @db.Uuid
+  processId         String          @unique @map("process_id") @db.Uuid
+  questionnaireJson Json            @map("questionnaire_json")
+  resultProfile     InvestorProfile @map("result_profile")
+  createdAt         DateTime        @default(now()) @map("created_at") @db.Timestamptz
+
+  process OnboardingProcess @relation(fields: [processId], references: [id], onDelete: Cascade)
+
+  @@map("suitability_responses")
+}
+
+// ============================================================================
+// COMPLIANCE (MVP: PEP alerts)
+// ============================================================================
+
+model ComplianceAlert {
+  id               String        @id @default(uuid()) @db.Uuid
+  type             AlertType
+  severity         AlertSeverity
+  entityType       String?       @map("entity_type") @db.VarChar(100)
+  entityId         String?       @map("entity_id") @db.Uuid
+  status           AlertStatus   @default(novo)
+  description      String?
+  reportedToCoafAt DateTime?     @map("reported_to_coaf_at") @db.Timestamptz
+  resolvedAt       DateTime?     @map("resolved_at") @db.Timestamptz
+  createdById      String?       @map("created_by") @db.Uuid
+  createdAt        DateTime      @default(now()) @map("created_at") @db.Timestamptz
+
+  @@index([status, severity])
+  @@map("compliance_alerts")
+}
+
+// ============================================================================
+// AUDIT
+// ============================================================================
+
+model AuditLog {
+  id         String      @id @default(uuid()) @db.Uuid
+  userId     String?     @map("user_id") @db.Uuid
+  action     String      @db.VarChar(100)
+  entityType String?     @map("entity_type") @db.VarChar(100)
+  entityId   String?     @map("entity_id") @db.Uuid
+  details    Json?       @default("{}")
+  ipAddress  String?     @map("ip_address")
+  result     AuditResult @default(sucesso)
+  createdAt  DateTime    @default(now()) @map("created_at") @db.Timestamptz
+
+  user User? @relation(fields: [userId], references: [id])
+
+  @@index([entityType, entityId, createdAt])
+  @@index([userId, createdAt])
+  @@index([createdAt])
+  @@map("audit_logs")
+}
