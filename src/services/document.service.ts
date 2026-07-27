@@ -1,7 +1,8 @@
 import type { DocumentType } from '@prisma/client';
 import { prisma } from '../db/index.js';
+import { env } from '../lib/env.js';
 import { APP_ERROR, KYC_DOCUMENT_TYPES } from '../lib/errors.js';
-import { buildObjectKey, fileUriForKey, getUploadUrl, headObject } from '../lib/s3.js';
+import { buildObjectKey, fileExists, fileUriForKey, keyFromFileUri } from '../lib/storage.js';
 import { hasPermissionInList } from './permission.service.js';
 import { logAudit } from './audit.service.js';
 
@@ -51,7 +52,7 @@ export async function getDocumentUploadUrl(
   });
 
   const key = buildObjectKey(input.partyId, input.type, doc.id);
-  const uploadUrl = await getUploadUrl(key, input.mimeType);
+  const uploadUrl = `${env.publicApiUrl}/files/upload/${doc.id}`;
 
   await prisma.document.update({
     where: { id: doc.id },
@@ -65,9 +66,9 @@ export async function confirmDocumentUpload(documentId: string, hash: string, us
   const doc = await prisma.document.findUnique({ where: { id: documentId } });
   if (!doc) throw APP_ERROR.NOT_FOUND('Documento');
 
-  const key = doc.fileUri.replace(/^s3:\/\/[^/]+\//, '');
-  const exists = await headObject(key);
-  if (!exists) throw APP_ERROR.BAD_REQUEST('Arquivo não encontrado no S3');
+  const key = keyFromFileUri(doc.fileUri);
+  const exists = await fileExists(key);
+  if (!exists) throw APP_ERROR.BAD_REQUEST('Arquivo não encontrado');
 
   const updated = await prisma.document.update({
     where: { id: documentId },

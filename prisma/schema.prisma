@@ -4,7 +4,6 @@ generator client {
 
 datasource db {
   provider = "postgresql"
-  url      = env("DATABASE_URL")
 }
 
 // ============================================================================
@@ -107,11 +106,28 @@ enum FundStatus {
 
 enum QuotaType {
   senior
+  senior_i
+  senior_ii
   mezanino
   subordinada
   unica
 
   @@map("quota_type")
+}
+
+enum SelicSource {
+  bacen
+  fallback_db
+
+  @@map("selic_source")
+}
+
+enum AmortizationKind {
+  mensal
+  final
+  manual
+
+  @@map("amortization_kind")
 }
 
 enum AssetClass {
@@ -225,7 +241,6 @@ model User {
   updatedAt   DateTime   @updatedAt @map("updated_at") @db.Timestamptz
 
   sessions            UserSession[]
-  userGroups          UserGroup[]
   permissionOverrides UserPermissionOverride[]
   auditLogs           AuditLog[]
   documentsUploaded   Document[]               @relation("DocumentUploader")
@@ -251,21 +266,6 @@ model UserSession {
   @@map("user_sessions")
 }
 
-model PermissionGroup {
-  id          String   @id @default(uuid()) @db.Uuid
-  name        String   @unique @db.VarChar(100)
-  description String?
-  mfaRequired Boolean  @default(false) @map("mfa_required")
-  isSystem    Boolean  @default(false) @map("is_system")
-  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz
-  updatedAt   DateTime @updatedAt @map("updated_at") @db.Timestamptz
-
-  groupPermissions GroupPermission[]
-  userGroups       UserGroup[]
-
-  @@map("permission_groups")
-}
-
 model Permission {
   id          String   @id @default(uuid()) @db.Uuid
   key         String   @unique @db.VarChar(100)
@@ -273,9 +273,8 @@ model Permission {
   module      String   @db.VarChar(50)
   createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz
 
-  groupPermissions GroupPermission[]
-  menuItems        MenuItem[]
-  userOverrides    UserPermissionOverride[]
+  menuItems     MenuItem[]
+  userOverrides UserPermissionOverride[]
 
   @@map("permissions")
 }
@@ -296,34 +295,6 @@ model MenuItem {
   children           MenuItem[] @relation("MenuHierarchy")
 
   @@map("menu_items")
-}
-
-model GroupPermission {
-  id           String  @id @default(uuid()) @db.Uuid
-  groupId      String  @map("group_id") @db.Uuid
-  permissionId String  @map("permission_id") @db.Uuid
-  granted      Boolean @default(true)
-
-  group      PermissionGroup @relation(fields: [groupId], references: [id], onDelete: Cascade)
-  permission Permission      @relation(fields: [permissionId], references: [id], onDelete: Cascade)
-
-  @@unique([groupId, permissionId])
-  @@map("group_permissions")
-}
-
-model UserGroup {
-  id         String   @id @default(uuid()) @db.Uuid
-  userId     String   @map("user_id") @db.Uuid
-  groupId    String   @map("group_id") @db.Uuid
-  assignedAt DateTime @default(now()) @map("assigned_at") @db.Timestamptz
-  assignedBy String?  @map("assigned_by") @db.Uuid
-
-  user  User            @relation(fields: [userId], references: [id], onDelete: Cascade)
-  group PermissionGroup @relation(fields: [groupId], references: [id], onDelete: Cascade)
-
-  @@unique([userId, groupId])
-  @@index([userId])
-  @@map("user_groups")
 }
 
 model UserPermissionOverride {
@@ -451,12 +422,20 @@ model Cedente {
 model Fund {
   id                   String       @id @default(uuid()) @db.Uuid
   name                 String       @db.VarChar(500)
+  legalName            String?      @map("legal_name") @db.VarChar(500)
   cnpj                 String       @unique @db.VarChar(18)
   cvmCode              String?      @map("cvm_code") @db.VarChar(50)
   modality             FundModality
   targetAudience       String?      @map("target_audience") @db.VarChar(100)
   status               FundStatus   @default(ativo)
+  inceptionDate        DateTime?    @map("inception_date") @db.Date
+  website              String?      @db.VarChar(500)
+  registeredAddress    String?      @map("registered_address") @db.VarChar(500)
+  description          String?      @db.Text
+  contactEmail         String?      @map("contact_email") @db.VarChar(255)
+  contactPhone         String?      @map("contact_phone") @db.VarChar(50)
   regulatoryLimitsJson Json         @default("{}") @map("regulatory_limits_json")
+  extraInfoJson        Json         @default("{}") @map("extra_info_json")
   createdAt            DateTime     @default(now()) @map("created_at") @db.Timestamptz
   updatedAt            DateTime     @updatedAt @map("updated_at") @db.Timestamptz
 
@@ -493,19 +472,75 @@ model ComplianceRule {
 }
 
 model PartyFundLink {
-  id          String    @id @default(uuid()) @db.Uuid
-  partyId     String    @map("party_id") @db.Uuid
-  fundId      String    @map("fund_id") @db.Uuid
-  quotaType   QuotaType @default(unica) @map("quota_type")
-  quotaAmount Decimal   @default(0) @map("quota_amount") @db.Decimal(18, 4)
-  linkedAt    DateTime  @default(now()) @map("linked_at") @db.Timestamptz
+  id                 String    @id @default(uuid()) @db.Uuid
+  partyId            String    @map("party_id") @db.Uuid
+  fundId             String    @map("fund_id") @db.Uuid
+  quotaType          QuotaType @default(unica) @map("quota_type")
+  quotaAmount        Decimal   @default(0) @map("quota_amount") @db.Decimal(18, 4)
+  quotaCount         Int       @default(0) @map("quota_count")
+  initialInvestment  Decimal   @default(0) @map("initial_investment") @db.Decimal(18, 2)
+  currentPrincipal   Decimal   @default(0) @map("current_principal") @db.Decimal(18, 2)
+  contractStartDate  DateTime? @map("contract_start_date") @db.Date
+  contractEndDate    DateTime? @map("contract_end_date") @db.Date
+  linkedAt           DateTime  @default(now()) @map("linked_at") @db.Timestamptz
 
-  party Party @relation(fields: [partyId], references: [id], onDelete: Cascade)
-  fund  Fund  @relation(fields: [fundId], references: [id], onDelete: Cascade)
+  party          Party                 @relation(fields: [partyId], references: [id], onDelete: Cascade)
+  fund           Fund                  @relation(fields: [fundId], references: [id], onDelete: Cascade)
+  dailyYields    CotistaDailyYield[]
+  amortizations  CotistaAmortization[]
 
   @@unique([partyId, fundId, quotaType])
   @@index([fundId])
   @@map("party_fund_links")
+}
+
+model SelicHistory {
+  id         String      @id @default(uuid()) @db.Uuid
+  date       DateTime    @unique @db.Date
+  selicAnual Decimal     @map("selic_anual") @db.Decimal(6, 2)
+  selicFator Decimal     @map("selic_fator") @db.Decimal(10, 6)
+  source     SelicSource @default(bacen)
+  createdAt  DateTime    @default(now()) @map("created_at") @db.Timestamptz
+
+  @@map("selic_history")
+}
+
+model CotistaDailyYield {
+  id                String      @id @default(uuid()) @db.Uuid
+  partyFundLinkId   String      @map("party_fund_link_id") @db.Uuid
+  referenceDate     DateTime    @map("reference_date") @db.Date
+  selicPercent      Decimal     @map("selic_percent") @db.Decimal(6, 2)
+  selicFactor       Decimal     @map("selic_factor") @db.Decimal(10, 6)
+  selicSource       SelicSource @default(bacen) @map("selic_source")
+  principal         Decimal     @db.Decimal(18, 2)
+  yieldDay          Decimal     @map("yield_day") @db.Decimal(18, 2)
+  yieldAccumulated  Decimal     @map("yield_accumulated") @db.Decimal(18, 2)
+  balanceTotal      Decimal     @map("balance_total") @db.Decimal(18, 2)
+  hadWithdraw       Boolean     @default(false) @map("had_withdraw")
+  withdrawAmount    Decimal?    @map("withdraw_amount") @db.Decimal(18, 2)
+  createdAt         DateTime    @default(now()) @map("created_at") @db.Timestamptz
+
+  partyFundLink PartyFundLink @relation(fields: [partyFundLinkId], references: [id], onDelete: Cascade)
+
+  @@unique([partyFundLinkId, referenceDate])
+  @@index([referenceDate])
+  @@map("cotista_daily_yields")
+}
+
+model CotistaAmortization {
+  id              String           @id @default(uuid()) @db.Uuid
+  partyFundLinkId String           @map("party_fund_link_id") @db.Uuid
+  occurredOn      DateTime         @map("occurred_on") @db.Date
+  amount          Decimal          @db.Decimal(18, 2)
+  kind            AmortizationKind @default(mensal)
+  periodStart     DateTime?        @map("period_start") @db.Date
+  periodEnd       DateTime?        @map("period_end") @db.Date
+  createdAt       DateTime         @default(now()) @map("created_at") @db.Timestamptz
+
+  partyFundLink PartyFundLink @relation(fields: [partyFundLinkId], references: [id], onDelete: Cascade)
+
+  @@index([partyFundLinkId, occurredOn])
+  @@map("cotista_amortizations")
 }
 
 // ============================================================================
@@ -648,4 +683,44 @@ model AuditLog {
   @@index([userId, createdAt])
   @@index([createdAt])
   @@map("audit_logs")
+}
+
+// ============================================================================
+// EXTERNAL PARTNERS (Bearer API)
+// ============================================================================
+
+model ApiPartner {
+  id                      String    @id @default(uuid()) @db.Uuid
+  name                    String    @unique @db.VarChar(100)
+  email                   String    @db.VarChar(255)
+  tokenHash               String    @map("token_hash") @db.VarChar(64)
+  previousTokenHash       String?   @map("previous_token_hash") @db.VarChar(64)
+  previousTokenValidUntil DateTime? @map("previous_token_valid_until") @db.Timestamptz
+  rateLimitRpm            Int       @default(120) @map("rate_limit_rpm")
+  active                  Boolean   @default(true)
+  createdAt               DateTime  @default(now()) @map("created_at") @db.Timestamptz
+  rotatedAt               DateTime? @map("rotated_at") @db.Timestamptz
+
+  requestLogs ApiPartnerRequestLog[]
+
+  @@index([tokenHash])
+  @@index([previousTokenHash])
+  @@index([email])
+  @@map("api_partners")
+}
+
+model ApiPartnerRequestLog {
+  id         String   @id @default(uuid()) @db.Uuid
+  partnerId  String   @map("partner_id") @db.Uuid
+  method     String   @db.VarChar(10)
+  path       String   @db.VarChar(512)
+  statusCode Int      @map("status_code")
+  ip         String?  @db.VarChar(64)
+  userAgent  String?  @map("user_agent") @db.VarChar(512)
+  createdAt  DateTime @default(now()) @map("created_at") @db.Timestamptz
+
+  partner ApiPartner @relation(fields: [partnerId], references: [id], onDelete: Cascade)
+
+  @@index([partnerId, createdAt(sort: Desc)])
+  @@map("api_partner_request_logs")
 }

@@ -1,6 +1,20 @@
 import { z } from 'zod';
 import { router, protectedProcedure, adminProcedure } from '../trpc/procedures.js';
 import { prisma } from '../db/index.js';
+import {
+  TAB_ACCESS_MAP,
+  TAB_LABELS,
+  createUserWithTabAccess,
+  listUsersWithTabAccess,
+  setUserTabAccess,
+  type TabAccessLevel,
+  type TabKey,
+} from '../services/user-access.service.js';
+
+const tabAccessSchema = z.record(
+  z.enum(Object.keys(TAB_ACCESS_MAP) as [TabKey, ...TabKey[]]),
+  z.enum(['read', 'write']).nullable(),
+);
 
 export const menuRouter = router({
   list: protectedProcedure.query(async ({ ctx }) => {
@@ -24,81 +38,46 @@ export const menuRouter = router({
   }),
 });
 
-export const groupsRouter = router({
-  list: adminProcedure.query(async () => {
-    const groups = await prisma.permissionGroup.findMany({
-      include: {
-        groupPermissions: { include: { permission: true } },
-      },
-      orderBy: { name: 'asc' },
-    });
-
-    return groups.map((g) => ({
-      id: g.id,
-      name: g.name,
-      description: g.description ?? undefined,
-      mfaRequired: g.mfaRequired,
-      isSystem: g.isSystem,
-      permissionKeys: g.groupPermissions.filter((gp) => gp.granted).map((gp) => gp.permission.key),
-    }));
-  }),
-
-  updatePermissions: adminProcedure
-    .input(z.object({ groupId: z.string().uuid(), permissionKeys: z.array(z.string()) }))
-    .mutation(async ({ input }) => {
-      const group = await prisma.permissionGroup.findUnique({ where: { id: input.groupId } });
-      if (!group) throw new Error('Grupo não encontrado');
-
-      const allPerms = await prisma.permission.findMany();
-      await prisma.groupPermission.deleteMany({ where: { groupId: input.groupId } });
-      for (const p of allPerms) {
-        if (input.permissionKeys.includes(p.key)) {
-          await prisma.groupPermission.create({
-            data: { groupId: input.groupId, permissionId: p.id, granted: true },
-          });
-        }
-      }
-
-      const updated = await prisma.permissionGroup.findUnique({
-        where: { id: input.groupId },
-        include: { groupPermissions: { include: { permission: true } } },
-      });
-
-      return {
-        id: updated!.id,
-        name: updated!.name,
-        description: updated!.description ?? undefined,
-        mfaRequired: updated!.mfaRequired,
-        isSystem: updated!.isSystem,
-        permissionKeys: updated!.groupPermissions
-          .filter((gp) => gp.granted)
-          .map((gp) => gp.permission.key),
-      };
-    }),
-});
-
 export const usersRouter = router({
-  list: adminProcedure.query(async () => {
-    const users = await prisma.user.findMany({
-      include: { userGroups: true },
-      orderBy: { name: 'asc' },
-    });
-    return users.map((u) => ({
-      id: u.id,
-      email: u.email,
-      name: u.name,
-      groupIds: u.userGroups.map((ug) => ug.groupId),
-    }));
-  }),
+  list: adminProcedure.query(async () => listUsersWithTabAccess()),
 
-  assignGroups: adminProcedure
-    .input(z.object({ userId: z.string().uuid(), groupIds: z.array(z.string().uuid()) }))
-    .mutation(async ({ input }) => {
-      await prisma.userGroup.deleteMany({ where: { userId: input.userId } });
-      for (const groupId of input.groupIds) {
-        await prisma.userGroup.create({ data: { userId: input.userId, groupId } });
-      }
-      const user = await prisma.user.findUnique({ where: { id: input.userId } });
-      return { id: user!.id };
-    }),
+  tabCatalog: adminProcedure.query(() =>
+    (Object.keys(TAB_ACCESS_MAP) as TabKey[]).map((key) => ({
+      key,
+      label: TAB_LABELS[key],
+      canWrite: Boolean(TAB_ACCESS_MAP[key].write),
+    })),
+  ),
+
+  create: adminProcedure
+    .input(
+      z.object({
+        email: z.string().email(),
+        name: z.string().min(2),
+        tabs: tabAccessSchema,
+      }),
+    )
+    .mutation(({ input, ctx }) =>
+      createUserWithTabAccess({
+        email: input.email,
+        name: input.name,
+        tabs: input.tabs as Partial<Record<TabKey, TabAccessLevel>>,
+        createdBy: ctx.user.id,
+      }),
+    ),
+
+  setTabAccess: adminProcedure
+    .input(
+      z.object({
+        userId: z.string().uuid(),
+        tabs: tabAccessSchema,
+      }),
+    )
+    .mutation(({ input, ctx }) =>
+      setUserTabAccess(
+        input.userId,
+        input.tabs as Partial<Record<TabKey, TabAccessLevel>>,
+        ctx.user.id,
+      ),
+    ),
 });

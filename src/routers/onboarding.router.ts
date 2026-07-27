@@ -8,7 +8,9 @@ const createSchema = z.object({
   legalName: z.string().min(3),
   fundId: z.string().uuid(),
   fundName: z.string().optional(),
-  quotaType: z.enum(['senior', 'mezanino', 'subordinada', 'unica']).optional(),
+  quotaType: z
+    .enum(['senior', 'senior_i', 'senior_ii', 'mezanino', 'subordinada', 'unica'])
+    .optional(),
 });
 
 export const onboardingRouter = router({

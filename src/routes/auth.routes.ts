@@ -1,18 +1,18 @@
 import type { Express, Request, Response } from 'express';
 import { z } from 'zod';
-import { COOKIE_NAME, loginByGroupName, signSessionCookie } from '../services/auth.service.js';
+import { COOKIE_NAME, loginByUserEmail, signSessionCookie } from '../services/auth.service.js';
 import { env } from '../lib/env.js';
 
 const loginSchema = z.object({
-  groupName: z.string().min(1),
+  email: z.string().email(),
 });
 
 export function registerAuthRoutes(app: Express) {
   app.post('/auth/login', async (req: Request, res: Response) => {
     try {
       const body = loginSchema.parse(req.body);
-      const { user, sessionId } = await loginByGroupName(
-        body.groupName,
+      const { user, sessionId } = await loginByUserEmail(
+        body.email,
         req.ip,
         req.get('user-agent') ?? undefined,
       );

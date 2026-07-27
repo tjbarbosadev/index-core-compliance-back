@@ -9,25 +9,12 @@ export async function resolveUserPermissions(userId: string): Promise<string[]> 
     return all.map((p) => p.key);
   }
 
-  const fromGroups = await prisma.groupPermission.findMany({
-    where: {
-      granted: true,
-      group: { userGroups: { some: { userId } } },
-    },
-    include: { permission: true },
-  });
-
   const overrides = await prisma.userPermissionOverride.findMany({
-    where: { userId },
+    where: { userId, granted: true },
     include: { permission: true },
   });
 
-  const keys = new Set(fromGroups.map((gp) => gp.permission.key));
-  for (const o of overrides) {
-    if (o.granted) keys.add(o.permission.key);
-    else keys.delete(o.permission.key);
-  }
-  return [...keys];
+  return overrides.map((o) => o.permission.key);
 }
 
 export async function userHasPermission(

@@ -1,11 +1,17 @@
 import cron from 'node-cron';
 import { prisma } from '../db/index.js';
+import { runDailyYieldJob } from '../services/cotista-yield.service.js';
 
 export function registerScheduledJobs() {
   cron.schedule('0 6 * * *', async () => {
     await checkOnboardingExpiration();
     await checkCadastroExpiration();
     await cadastroExpirationAlert();
+    try {
+      await runDailyYieldJob();
+    } catch (err) {
+      console.error('[job] falha ao gravar yields diários', err);
+    }
   });
 }
 

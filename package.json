@@ -20,13 +20,16 @@
     "db:migrate": "prisma migrate dev",
     "db:push": "prisma db push",
     "db:seed": "tsx prisma/seed.ts",
+    "db:backfill-yields": "tsx prisma/backfill-yields.ts",
+    "partner:create": "tsx prisma/partner-cli.ts create",
+    "partner:rotate": "tsx prisma/partner-cli.ts rotate",
+    "partner:list": "tsx prisma/partner-cli.ts list",
     "db:studio": "prisma studio",
     "postinstall": "prisma generate"
   },
   "dependencies": {
-    "@aws-sdk/client-s3": "^3.840.0",
-    "@aws-sdk/s3-request-presigner": "^3.840.0",
-    "@prisma/client": "^6.11.1",
+    "@prisma/adapter-pg": "^7.9.0",
+    "@prisma/client": "^7.9.0",
     "@trpc/server": "^11.4.3",
     "cookie-parser": "^1.4.7",
     "cors": "^2.8.5",
@@ -34,6 +37,8 @@
     "express": "^4.21.2",
     "jsonwebtoken": "^9.0.2",
     "node-cron": "^4.2.0",
+    "pg": "^8.22.0",
+    "resend": "^6.18.0",
     "zod": "^3.25.67"
   },
   "devDependencies": {
@@ -46,6 +51,7 @@
     "@types/jsonwebtoken": "^9.0.10",
     "@types/node": "^22.15.32",
     "@types/node-cron": "^3.0.11",
+    "@types/pg": "^8.20.0",
     "commitizen": "^4.3.1",
     "cz-conventional-changelog": "^3.3.0",
     "eslint": "^9.29.0",
@@ -53,7 +59,7 @@
     "husky": "^9.1.7",
     "lint-staged": "^16.1.2",
     "prettier": "^3.5.3",
-    "prisma": "^6.11.1",
+    "prisma": "^7.9.0",
     "tsx": "^4.20.3",
     "typescript": "^5.8.3",
     "typescript-eslint": "^8.34.1",
@@ -63,8 +69,5 @@
     "commitizen": {
       "path": "cz-conventional-changelog"
     }
-  },
-  "prisma": {
-    "seed": "tsx prisma/seed.ts"
   }
 }

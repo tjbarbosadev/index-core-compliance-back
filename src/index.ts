@@ -7,20 +7,35 @@ import { appRouter } from './trpc/router.js';
 import { createContext } from './trpc/context.js';
 import { env } from './lib/env.js';
 import { registerAuthRoutes } from './routes/auth.routes.js';
+import { registerFilesRoutes } from './routes/files.routes.js';
+import { registerV1Routes } from './routes/v1.routes.js';
+import { registerPartnerAdminRoutes } from './routes/partner-admin.routes.js';
 import { registerScheduledJobs } from './lib/scheduler.js';
 
 const app = express();
 
 app.use(
   cors({
-    origin: env.corsOrigin,
+    origin(origin, callback) {
+      // Server-to-server (sem Origin) ou origin na allowlist de sites próprios
+      if (!origin || env.corsOrigins.includes(origin)) {
+        callback(null, true);
+        return;
+      }
+      callback(null, false);
+    },
     credentials: true,
   }),
 );
-app.use(express.json());
 app.use(cookieParser());
 
+registerFilesRoutes(app);
+
+app.use(express.json());
+
 registerAuthRoutes(app);
+registerV1Routes(app);
+registerPartnerAdminRoutes(app);
 
 app.use(
   '/trpc',
@@ -33,5 +48,5 @@ app.use(
 registerScheduledJobs();
 
 app.listen(env.port, () => {
-  console.log(`IndexCore API listening on http://localhost:${env.port}`);
+  console.log(`opcore_api listening on http://localhost:${env.port}`);
 });

@@ -2,6 +2,13 @@ import { prisma } from '../db/index.js';
 import { APP_ERROR } from '../lib/errors.js';
 import { hasPermissionInList } from './permission.service.js';
 import { logAudit } from './audit.service.js';
+import { getVisualizationDate, parseYYYYMMDD, toYYYYMMDD } from './quota-calculator.js';
+import {
+  getYieldForDate,
+  getLatestYieldOnOrBefore,
+  listAmortizations,
+  listYields,
+} from './cotista-yield.service.js';
 
 type GestorRow = {
   id: string;
@@ -12,6 +19,44 @@ type GestorRow = {
   branch: string | null;
   account: string | null;
 };
+
+const QUOTA_LABELS: Record<string, string> = {
+  senior_i: 'Sênior I',
+  senior_ii: 'Sênior II',
+  senior: 'Sênior',
+  mezanino: 'Mezanino',
+  subordinada: 'Subordinada',
+  unica: 'Única',
+};
+
+/** Valor unitário de cada cota (R$). */
+export const QUOTA_UNIT_BRL = 10_000;
+
+function mapYieldRow(y: {
+  referenceDate: Date;
+  selicPercent: { toString(): string } | number;
+  selicFactor: { toString(): string } | number;
+  selicSource: string;
+  principal: { toString(): string } | number;
+  yieldDay: { toString(): string } | number;
+  yieldAccumulated: { toString(): string } | number;
+  balanceTotal: { toString(): string } | number;
+  hadWithdraw: boolean;
+  withdrawAmount: { toString(): string } | number | null;
+}) {
+  return {
+    referenceDate: toYYYYMMDD(y.referenceDate),
+    selicPercent: Number(y.selicPercent),
+    selicFactor: Number(y.selicFactor),
+    selicSource: y.selicSource,
+    principal: Number(y.principal),
+    yieldDay: Number(y.yieldDay),
+    yieldAccumulated: Number(y.yieldAccumulated),
+    balanceTotal: Number(y.balanceTotal),
+    hadWithdraw: y.hadWithdraw,
+    withdrawAmount: y.withdrawAmount != null ? Number(y.withdrawAmount) : null,
+  };
+}
 
 export async function mapCotistaFull(cotistaId: string) {
   const cotista = await prisma.cotista.findUnique({
@@ -29,10 +74,76 @@ export async function mapCotistaFull(cotistaId: string) {
   });
   if (!cotista) throw APP_ERROR.NOT_FOUND('Cotista');
 
-  const link = cotista.party.partyFundLinks[0];
+  const links = [...cotista.party.partyFundLinks].sort(
+    (a, b) => a.linkedAt.getTime() - b.linkedAt.getTime(),
+  );
+  const link = links[0];
   const primary =
     cotista.party.bankAccounts.find((b) => b.isPrimary) ?? cotista.party.bankAccounts[0];
   const contact = cotista.party.contacts.find((c) => c.isPrimary) ?? cotista.party.contacts[0];
+
+  const vizDate = toYYYYMMDD(getVisualizationDate());
+  let latestYield = null as ReturnType<typeof mapYieldRow> | null;
+  let amortizations: Array<{
+    id: string;
+    occurredOn: string;
+    amount: number;
+    kind: string;
+    periodStart: string | null;
+    periodEnd: string | null;
+  }> = [];
+
+  // Agrega saldo/rendimentos do dia útil anterior em todas as posições
+  const perLinkYields = await Promise.all(
+    links.map(async (l) => getLatestYieldOnOrBefore(l.id, vizDate)),
+  );
+  const present = perLinkYields.filter(Boolean) as NonNullable<(typeof perLinkYields)[number]>[];
+  if (present.length > 0) {
+    const first = mapYieldRow(present[0]!);
+    latestYield = {
+      ...first,
+      referenceDate: toYYYYMMDD(
+        present.reduce(
+          (max, y) => (y.referenceDate > max ? y.referenceDate : max),
+          present[0]!.referenceDate,
+        ),
+      ),
+      principal: present.reduce((s, y) => s + Number(y.principal), 0),
+      yieldDay: present.reduce((s, y) => s + Number(y.yieldDay), 0),
+      yieldAccumulated: present.reduce((s, y) => s + Number(y.yieldAccumulated), 0),
+      balanceTotal: present.reduce((s, y) => s + Number(y.balanceTotal), 0),
+      hadWithdraw: present.some((y) => y.hadWithdraw),
+      withdrawAmount:
+        present.reduce(
+          (s, y) => s + (y.withdrawAmount != null ? Number(y.withdrawAmount) : 0),
+          0,
+        ) || null,
+    };
+  }
+
+  if (link) {
+    const amorts = await listAmortizations(link.id);
+    amortizations = amorts.map((a) => ({
+      id: a.id,
+      occurredOn: toYYYYMMDD(a.occurredOn),
+      amount: Number(a.amount),
+      kind: a.kind,
+      periodStart: a.periodStart ? toYYYYMMDD(a.periodStart) : null,
+      periodEnd: a.periodEnd ? toYYYYMMDD(a.periodEnd) : null,
+    }));
+  }
+
+  const positions = links.map((l) => ({
+    id: l.id,
+    fundId: l.fundId,
+    fundName: l.fund.name,
+    quotaType: l.quotaType,
+    quotaTypeLabel: QUOTA_LABELS[l.quotaType] ?? l.quotaType,
+    quotaCount: l.quotaCount,
+    initialInvestment: Number(l.initialInvestment),
+    contractStartDate: l.contractStartDate ? toYYYYMMDD(l.contractStartDate) : null,
+    contractEndDate: l.contractEndDate ? toYYYYMMDD(l.contractEndDate) : null,
+  }));
 
   return {
     id: cotista.id,
@@ -45,6 +156,18 @@ export async function mapCotistaFull(cotistaId: string) {
     expiresAt: cotista.party.expiresAt?.toISOString() ?? null,
     fundId: link?.fundId ?? '',
     fundName: link?.fund.name ?? '',
+    quotaType: link?.quotaType ?? null,
+    quotaTypeLabel: link ? (QUOTA_LABELS[link.quotaType] ?? link.quotaType) : null,
+    quotaCount: link?.quotaCount ?? 0,
+    initialInvestment: link ? Number(link.initialInvestment) : 0,
+    contractStartDate: link?.contractStartDate ? toYYYYMMDD(link.contractStartDate) : null,
+    contractEndDate: link?.contractEndDate ? toYYYYMMDD(link.contractEndDate) : null,
+    partyFundLinkId: link?.id ?? null,
+    positions,
+    visualizationDate: vizDate,
+    latestYield,
+    yieldHistory: [] as ReturnType<typeof mapYieldRow>[],
+    amortizations,
     investorProfile: cotista.investorProfile ?? undefined,
     email: contact?.email ?? undefined,
     phone: contact?.phone ?? undefined,
@@ -137,6 +260,126 @@ export async function getCotistaById(id: string, permissions: string[], isAdmin:
   return mapCotistaFull(id);
 }
 
+function monthBounds(yearMonth: string): { from: string; to: string } {
+  const [ys, ms] = yearMonth.split('-');
+  const y = Number(ys);
+  const m = Number(ms);
+  if (!y || !m || m < 1 || m > 12) throw APP_ERROR.BAD_REQUEST('Mês inválido');
+  const from = `${ys}-${ms!.padStart(2, '0')}-01`;
+  const last = new Date(Date.UTC(y, m, 0, 12));
+  return { from, to: toYYYYMMDD(last) };
+}
+
+function minDateStr(...dates: string[]): string {
+  return dates.reduce((a, b) => (a < b ? a : b));
+}
+
+function maxDateStr(...dates: string[]): string {
+  return dates.reduce((a, b) => (a > b ? a : b));
+}
+
+function aggregateYieldRows(
+  rows: Array<Parameters<typeof mapYieldRow>[0] & { referenceDate: Date }>,
+): ReturnType<typeof mapYieldRow>[] {
+  const byDate = new Map<string, ReturnType<typeof mapYieldRow>>();
+  for (const row of rows) {
+    const mapped = mapYieldRow(row);
+    const existing = byDate.get(mapped.referenceDate);
+    if (!existing) {
+      byDate.set(mapped.referenceDate, mapped);
+      continue;
+    }
+    byDate.set(mapped.referenceDate, {
+      ...existing,
+      principal: existing.principal + mapped.principal,
+      yieldDay: existing.yieldDay + mapped.yieldDay,
+      yieldAccumulated: existing.yieldAccumulated + mapped.yieldAccumulated,
+      balanceTotal: existing.balanceTotal + mapped.balanceTotal,
+      hadWithdraw: existing.hadWithdraw || mapped.hadWithdraw,
+      withdrawAmount: (existing.withdrawAmount ?? 0) + (mapped.withdrawAmount ?? 0) || null,
+    });
+  }
+  return [...byDate.values()].sort((a, b) => b.referenceDate.localeCompare(a.referenceDate));
+}
+
+export async function getCotistaYields(
+  cotistaId: string,
+  opts?: { date?: string; yearMonth?: string; limit?: number },
+) {
+  const vizDate = toYYYYMMDD(getVisualizationDate());
+  const cotista = await prisma.cotista.findUnique({
+    where: { id: cotistaId },
+    include: { party: { include: { partyFundLinks: true } } },
+  });
+  if (!cotista) throw APP_ERROR.NOT_FOUND('Cotista');
+  const links = cotista.party.partyFundLinks;
+  if (links.length === 0)
+    return { visualizationDate: vizDate, yearMonth: opts?.yearMonth ?? null, items: [] };
+
+  if (opts?.date) {
+    const perLink = await Promise.all(links.map((l) => getYieldForDate(l.id, opts.date!)));
+    const present = perLink.filter(Boolean) as NonNullable<(typeof perLink)[number]>[];
+    return {
+      visualizationDate: opts.date,
+      yearMonth: opts.date.slice(0, 7),
+      items: aggregateYieldRows(present),
+    };
+  }
+
+  if (opts?.yearMonth) {
+    const bounds = monthBounds(opts.yearMonth);
+    const starts = links
+      .map((l) => (l.contractStartDate ? toYYYYMMDD(l.contractStartDate) : null))
+      .filter((d): d is string => Boolean(d));
+    const ends = links
+      .map((l) => (l.contractEndDate ? toYYYYMMDD(l.contractEndDate) : null))
+      .filter((d): d is string => Boolean(d));
+
+    const contractStart = starts.length > 0 ? minDateStr(...starts) : bounds.from;
+    const contractEnd = ends.length > 0 ? maxDateStr(...ends) : vizDate;
+    const endCap = minDateStr(contractEnd, vizDate);
+    const from = maxDateStr(bounds.from, contractStart);
+    const to = minDateStr(bounds.to, endCap);
+
+    if (from > to) {
+      return { visualizationDate: vizDate, yearMonth: opts.yearMonth, items: [] };
+    }
+
+    const nested = await Promise.all(links.map((l) => listYields(l.id, { from, to, limit: 31 })));
+    return {
+      visualizationDate: vizDate,
+      yearMonth: opts.yearMonth,
+      items: aggregateYieldRows(nested.flat()),
+    };
+  }
+
+  const hist = await Promise.all(links.map((l) => listYields(l.id, { limit: opts?.limit ?? 90 })));
+  return {
+    visualizationDate: vizDate,
+    yearMonth: null,
+    items: aggregateYieldRows(hist.flat()),
+  };
+}
+
+export async function getCotistaAmortizations(cotistaId: string) {
+  const cotista = await prisma.cotista.findUnique({
+    where: { id: cotistaId },
+    include: { party: { include: { partyFundLinks: true } } },
+  });
+  if (!cotista) throw APP_ERROR.NOT_FOUND('Cotista');
+  const link = cotista.party.partyFundLinks[0];
+  if (!link) return [];
+  const rows = await listAmortizations(link.id);
+  return rows.map((a) => ({
+    id: a.id,
+    occurredOn: toYYYYMMDD(a.occurredOn),
+    amount: Number(a.amount),
+    kind: a.kind,
+    periodStart: a.periodStart ? toYYYYMMDD(a.periodStart) : null,
+    periodEnd: a.periodEnd ? toYYYYMMDD(a.periodEnd) : null,
+  }));
+}
+
 export async function approveCotista(id: string, expiresAt: string, userId: string, ip?: string) {
   const cotista = await prisma.cotista.findUnique({ where: { id }, include: { party: true } });
   if (!cotista) throw APP_ERROR.NOT_FOUND('Cotista');
@@ -153,9 +396,10 @@ export async function approveCotista(id: string, expiresAt: string, userId: stri
 
   await logAudit({
     userId,
-    action: 'cotistas.approve',
+    action: 'cotista.approve',
     entityType: 'cotista',
     entityId: id,
+    result: 'sucesso',
     ipAddress: ip,
   });
 
@@ -163,7 +407,7 @@ export async function approveCotista(id: string, expiresAt: string, userId: stri
 }
 
 export async function rejectCotista(id: string, reason: string, userId: string, ip?: string) {
-  const cotista = await prisma.cotista.findUnique({ where: { id } });
+  const cotista = await prisma.cotista.findUnique({ where: { id }, include: { party: true } });
   if (!cotista) throw APP_ERROR.NOT_FOUND('Cotista');
 
   await prisma.party.update({
@@ -173,9 +417,10 @@ export async function rejectCotista(id: string, reason: string, userId: string, 
 
   await logAudit({
     userId,
-    action: 'cotistas.reject',
+    action: 'cotista.reject',
     entityType: 'cotista',
     entityId: id,
+    result: 'sucesso',
     details: { reason },
     ipAddress: ip,
   });
@@ -183,17 +428,236 @@ export async function rejectCotista(id: string, reason: string, userId: string, 
   return mapCotistaFull(id);
 }
 
-export async function listCedentes() {
-  const cedentes = await prisma.cedente.findMany({
-    include: { party: true },
-    orderBy: { createdAt: 'desc' },
+export type CotistaWriteInput = {
+  legalName: string;
+  cpfCnpj: string;
+  email?: string;
+  phone?: string;
+  positions: Array<{
+    fundId: string;
+    quotaType: 'senior_i' | 'senior_ii';
+    quotaCount: number;
+  }>;
+  contractStartDate?: string | null;
+  contractEndDate?: string | null;
+};
+
+function normalizeDocument(cpfCnpj: string): string {
+  return cpfCnpj.replace(/\D/g, '');
+}
+
+function partyTypeFromDocument(digits: string): 'pf' | 'pj' {
+  return digits.length <= 11 ? 'pf' : 'pj';
+}
+
+function validatePositions(positions: CotistaWriteInput['positions']): Array<{
+  fundId: string;
+  quotaType: 'senior_i' | 'senior_ii';
+  quotaCount: number;
+  investment: number;
+}> {
+  if (!positions.length) throw APP_ERROR.BAD_REQUEST('Informe ao menos uma posição');
+  const keys = new Set<string>();
+  return positions.map((p) => {
+    const key = `${p.fundId}:${p.quotaType}`;
+    if (keys.has(key)) {
+      throw APP_ERROR.BAD_REQUEST('Posição duplicada (mesmo fundo e tipo de cota)');
+    }
+    keys.add(key);
+    const quotaCount = Math.max(0, Math.floor(Number(p.quotaCount) || 0));
+    if (quotaCount < 1) throw APP_ERROR.BAD_REQUEST('Quantidade de cotas deve ser pelo menos 1');
+    return {
+      fundId: p.fundId,
+      quotaType: p.quotaType,
+      quotaCount,
+      investment: quotaCount * QUOTA_UNIT_BRL,
+    };
   });
-  return cedentes.map((c) => ({
-    id: c.id,
-    partyId: c.partyId,
-    legalName: c.party.legalName,
-    cnpj: c.party.cpfCnpj,
-    status: c.party.status,
-    juntaValidationStatus: c.juntaValidationStatus,
-  }));
+}
+
+export async function createCotista(input: CotistaWriteInput, userId: string, ip?: string) {
+  const digits = normalizeDocument(input.cpfCnpj);
+  if (digits.length < 11) throw APP_ERROR.BAD_REQUEST('CPF/CNPJ inválido');
+  const legalName = input.legalName.trim();
+  if (!legalName) throw APP_ERROR.BAD_REQUEST('Nome obrigatório');
+
+  const positions = validatePositions(input.positions);
+  for (const p of positions) {
+    const fund = await prisma.fund.findUnique({ where: { id: p.fundId } });
+    if (!fund) throw APP_ERROR.NOT_FOUND('Fundo');
+  }
+
+  const existing = await prisma.party.findUnique({ where: { cpfCnpj: digits } });
+  if (existing) throw APP_ERROR.CONFLICT('Já existe cadastro com este CPF/CNPJ');
+
+  const start = input.contractStartDate ? parseYYYYMMDD(input.contractStartDate) : null;
+  const end = input.contractEndDate ? parseYYYYMMDD(input.contractEndDate) : null;
+
+  const createdId = await prisma.$transaction(async (tx) => {
+    const party = await tx.party.create({
+      data: {
+        type: partyTypeFromDocument(digits),
+        cpfCnpj: digits,
+        legalName,
+        status: 'aprovado',
+        riskLevel: 'baixo',
+        pepFlag: false,
+        approvedAt: new Date(),
+        approvedBy: userId,
+      },
+    });
+
+    const row = await tx.cotista.create({
+      data: { partyId: party.id },
+    });
+
+    if (input.email || input.phone) {
+      await tx.partyContact.create({
+        data: {
+          partyId: party.id,
+          email: input.email?.trim() || null,
+          phone: input.phone?.trim() || null,
+          isPrimary: true,
+        },
+      });
+    }
+
+    for (const p of positions) {
+      await tx.partyFundLink.create({
+        data: {
+          partyId: party.id,
+          fundId: p.fundId,
+          quotaType: p.quotaType,
+          initialInvestment: p.investment,
+          currentPrincipal: p.investment,
+          quotaCount: p.quotaCount,
+          quotaAmount: p.investment,
+          contractStartDate: start,
+          contractEndDate: end,
+        },
+      });
+    }
+
+    return row.id;
+  });
+
+  await logAudit({
+    userId,
+    action: 'cotista.create',
+    entityType: 'cotista',
+    entityId: createdId,
+    result: 'sucesso',
+    ipAddress: ip,
+  });
+
+  return mapCotistaFull(createdId);
+}
+
+export async function updateCotista(
+  id: string,
+  input: CotistaWriteInput,
+  userId: string,
+  ip?: string,
+) {
+  const cotista = await prisma.cotista.findUnique({
+    where: { id },
+    include: {
+      party: { include: { contacts: true, partyFundLinks: true } },
+    },
+  });
+  if (!cotista) throw APP_ERROR.NOT_FOUND('Cotista');
+
+  const digits = normalizeDocument(input.cpfCnpj);
+  if (digits.length < 11) throw APP_ERROR.BAD_REQUEST('CPF/CNPJ inválido');
+  const legalName = input.legalName.trim();
+  if (!legalName) throw APP_ERROR.BAD_REQUEST('Nome obrigatório');
+
+  const positions = validatePositions(input.positions);
+  for (const p of positions) {
+    const fund = await prisma.fund.findUnique({ where: { id: p.fundId } });
+    if (!fund) throw APP_ERROR.NOT_FOUND('Fundo');
+  }
+
+  if (digits !== cotista.party.cpfCnpj) {
+    const clash = await prisma.party.findUnique({ where: { cpfCnpj: digits } });
+    if (clash) throw APP_ERROR.CONFLICT('Já existe cadastro com este CPF/CNPJ');
+  }
+
+  const contact = cotista.party.contacts.find((c) => c.isPrimary) ?? cotista.party.contacts[0];
+  const start = input.contractStartDate ? parseYYYYMMDD(input.contractStartDate) : null;
+  const end = input.contractEndDate ? parseYYYYMMDD(input.contractEndDate) : null;
+
+  await prisma.$transaction(async (tx) => {
+    await tx.party.update({
+      where: { id: cotista.partyId },
+      data: {
+        legalName,
+        cpfCnpj: digits,
+        type: partyTypeFromDocument(digits),
+      },
+    });
+
+    if (contact) {
+      await tx.partyContact.update({
+        where: { id: contact.id },
+        data: {
+          email: input.email?.trim() || null,
+          phone: input.phone?.trim() || null,
+        },
+      });
+    } else if (input.email || input.phone) {
+      await tx.partyContact.create({
+        data: {
+          partyId: cotista.partyId,
+          email: input.email?.trim() || null,
+          phone: input.phone?.trim() || null,
+          isPrimary: true,
+        },
+      });
+    }
+
+    for (const p of positions) {
+      const existing = cotista.party.partyFundLinks.find(
+        (l) => l.fundId === p.fundId && l.quotaType === p.quotaType,
+      );
+      if (existing) {
+        await tx.partyFundLink.update({
+          where: { id: existing.id },
+          data: {
+            initialInvestment: p.investment,
+            currentPrincipal: p.investment,
+            quotaCount: p.quotaCount,
+            quotaAmount: p.investment,
+            contractStartDate: start,
+            contractEndDate: end,
+          },
+        });
+      } else {
+        await tx.partyFundLink.create({
+          data: {
+            partyId: cotista.partyId,
+            fundId: p.fundId,
+            quotaType: p.quotaType,
+            initialInvestment: p.investment,
+            currentPrincipal: p.investment,
+            quotaCount: p.quotaCount,
+            quotaAmount: p.investment,
+            contractStartDate: start,
+            contractEndDate: end,
+          },
+        });
+      }
+    }
+  });
+
+  await logAudit({
+    userId,
+    action: 'cotista.update',
+    entityType: 'cotista',
+    entityId: id,
+    result: 'sucesso',
+    ipAddress: ip,
+  });
+
+  return mapCotistaFull(id);
 }

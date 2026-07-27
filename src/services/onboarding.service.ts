@@ -310,14 +310,14 @@ export async function approveOnboarding(
           partyId_fundId_quotaType: {
             partyId: process.partyId,
             fundId: process.fundId,
-            quotaType: process.quotaType ?? 'senior',
+            quotaType: process.quotaType ?? 'senior_i',
           },
         },
         update: {},
         create: {
           partyId: process.partyId,
           fundId: process.fundId,
-          quotaType: process.quotaType ?? 'senior',
+          quotaType: process.quotaType ?? 'senior_i',
         },
       });
 

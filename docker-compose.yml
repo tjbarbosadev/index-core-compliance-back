@@ -4,11 +4,11 @@ services:
     ports:
       - '5432:5432'
     environment:
-      POSTGRES_DB: indexcore
-      POSTGRES_USER: indexcore
-      POSTGRES_PASSWORD: indexcore
+      POSTGRES_DB: opcore
+      POSTGRES_USER: opcore
+      POSTGRES_PASSWORD: opcore
     volumes:
-      - indexcore_pg:/var/lib/postgresql/data
+      - opcore_pg:/var/lib/postgresql/data
 
 volumes:
-  indexcore_pg:
+  opcore_pg:

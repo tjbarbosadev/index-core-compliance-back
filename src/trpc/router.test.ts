@@ -10,6 +10,8 @@ describe('health router', () => {
       user: null,
       permissions: [],
       sessionId: undefined,
+      partner: null,
+      serviceAuth: false,
       ip: '127.0.0.1',
     });
     const result = await caller.health.check();

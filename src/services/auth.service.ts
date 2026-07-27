@@ -58,39 +58,15 @@ export async function getUserFromSession(sessionId: string, userId: string) {
       revokedAt: null,
       expiresAt: { gt: new Date() },
     },
-    include: {
-      user: {
-        include: {
-          userGroups: { include: { group: true } },
-        },
-      },
-    },
+    include: { user: true },
   });
   return session?.user ?? null;
 }
 
-export async function loginByGroupName(groupName: string, ip?: string, userAgent?: string) {
-  const group = await prisma.permissionGroup.findUnique({ where: { name: groupName } });
-  if (!group) throw new Error('Grupo não encontrado');
-
-  const email = `${groupName.toLowerCase().replace(/\s+/g, '.')}@indexcore.local`;
-  let user = await prisma.user.findUnique({ where: { email } });
-  if (!user) {
-    user = await prisma.user.create({
-      data: {
-        email,
-        name: groupName,
-        isAdmin: groupName === 'Administrador',
-        mfaRequired: false,
-      },
-    });
-  }
-
-  await prisma.userGroup.upsert({
-    where: { userId_groupId: { userId: user.id, groupId: group.id } },
-    update: {},
-    create: { userId: user.id, groupId: group.id },
-  });
+export async function loginByUserEmail(email: string, ip?: string, userAgent?: string) {
+  const user = await prisma.user.findUnique({ where: { email } });
+  if (!user) throw new Error('Usuário não encontrado');
+  if (user.status !== 'active') throw new Error('Usuário inativo');
 
   const { sessionId } = await createSession(user.id, ip, userAgent);
   return { user, sessionId };
@@ -104,10 +80,7 @@ export async function logoutUser(sessionId: string) {
 }
 
 export async function buildUserWithPermissions(userId: string) {
-  const user = await prisma.user.findUnique({
-    where: { id: userId },
-    include: { userGroups: { include: { group: true } } },
-  });
+  const user = await prisma.user.findUnique({ where: { id: userId } });
   if (!user) return null;
 
   const permissions = await resolveUserPermissions(userId);
@@ -116,9 +89,8 @@ export async function buildUserWithPermissions(userId: string) {
     name: user.name,
     email: user.email,
     isAdmin: user.isAdmin,
-    mfaRequired: false,
+    mfaRequired: user.mfaRequired,
     mfaVerified: true,
-    groups: user.userGroups.map((ug) => ({ id: ug.group.id, name: ug.group.name })),
     permissions,
   };
 }

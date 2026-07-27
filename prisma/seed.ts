@@ -1,6 +1,12 @@
-import { PrismaClient, FundModality, AssetClass } from '@prisma/client';
+import { readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { FundModality, AssetClass, type QuotaType } from '@prisma/client';
+import { prisma } from '../src/db/index.js';
+import { mapDataJsonQuota, parseYYYYMMDD } from '../src/services/quota-calculator.js';
+import { backfillAllActiveYields } from '../src/services/cotista-yield.service.js';
 
-const prisma = new PrismaClient();
+const __dirname = dirname(fileURLToPath(import.meta.url));
 
 const PERMISSIONS = [
   { key: 'dashboard.read', description: 'Ver dashboard', module: 'dashboard' },
@@ -10,6 +16,7 @@ const PERMISSIONS = [
   { key: 'onboarding.write', description: 'Criar e avançar onboarding', module: 'onboarding' },
   { key: 'onboarding.approve', description: 'Aprovar/rejeitar onboarding', module: 'onboarding' },
   { key: 'cotistas.read', description: 'Listar cotistas', module: 'cotistas' },
+  { key: 'cotistas.write', description: 'Editar cotistas', module: 'cotistas' },
   { key: 'cotistas.view_kyc', description: 'Ver dados KYC completos', module: 'cotistas' },
   { key: 'cotistas.approve', description: 'Aprovar/rejeitar cotista', module: 'cotistas' },
   { key: 'cedentes.read', description: 'Listar cedentes', module: 'cedentes' },
@@ -37,10 +44,11 @@ const PERMISSIONS = [
   },
   { key: 'audit.read', description: 'Consultar auditoria', module: 'audit' },
   { key: 'arquivo.read', description: 'Consultar arquivo de evidências', module: 'arquivo' },
-  { key: 'admin.manage_access', description: 'Gerenciar grupos e usuários', module: 'admin' },
+  { key: 'admin.manage_access', description: 'Gerenciar usuários e permissões', module: 'admin' },
 ] as const;
 
-const GROUP_PERMISSIONS: Record<string, string[]> = {
+/** Perfis de referência para seed (overrides por usuário — não há mais grupos). */
+const PROFILE_PERMISSIONS: Record<string, string[]> = {
   Administrador: PERMISSIONS.map((p) => p.key),
   Compliance: [
     'dashboard.read',
@@ -50,6 +58,7 @@ const GROUP_PERMISSIONS: Record<string, string[]> = {
     'onboarding.write',
     'onboarding.approve',
     'cotistas.read',
+    'cotistas.write',
     'cotistas.view_kyc',
     'cotistas.approve',
     'cedentes.read',
@@ -172,18 +181,127 @@ const MENU_ITEMS = [
 ];
 
 const SEED_USERS = [
-  { email: 'admin@indexcore.local', name: 'Administrador', group: 'Administrador', isAdmin: true },
-  { email: 'compliance@indexcore.local', name: 'Compliance', group: 'Compliance', isAdmin: false },
-  { email: 'gestao@indexcore.local', name: 'Gestão', group: 'Gestão', isAdmin: false },
+  {
+    email: 'admin@indexcore.local',
+    name: 'Administrador',
+    profile: 'Administrador',
+    isAdmin: true,
+  },
+  {
+    email: 'compliance@indexcore.local',
+    name: 'Compliance',
+    profile: 'Compliance',
+    isAdmin: false,
+  },
+  { email: 'gestao@indexcore.local', name: 'Gestão', profile: 'Gestão', isAdmin: false },
   {
     email: 'operacional@indexcore.local',
     name: 'Operacional',
-    group: 'Operacional',
+    profile: 'Operacional',
     isAdmin: false,
   },
-  { email: 'ouvidoria@indexcore.local', name: 'Ouvidoria', group: 'Ouvidoria', isAdmin: false },
-  { email: 'fiduciaria@indexcore.local', name: 'Fiduciária', group: 'Fiduciária', isAdmin: false },
+  { email: 'ouvidoria@indexcore.local', name: 'Ouvidoria', profile: 'Ouvidoria', isAdmin: false },
+  {
+    email: 'fiduciaria@indexcore.local',
+    name: 'Fiduciária',
+    profile: 'Fiduciária',
+    isAdmin: false,
+  },
 ];
+
+type DataClient = {
+  id: number;
+  name: string;
+  document: string;
+  email: string;
+  phone: string;
+  investment: number;
+  totalQuotas: number;
+  initialDate: string;
+  finalDate: string;
+  quota: string;
+};
+
+function parseBrDate(d: string): Date {
+  const [dd, mm, yyyy] = d.split('/');
+  return parseYYYYMMDD(`${yyyy}-${mm}-${dd}`);
+}
+
+async function seedCotistasFromDataJson(fundId: string) {
+  const dataPath = join(__dirname, '../../docs/data.json');
+  const raw = JSON.parse(readFileSync(dataPath, 'utf-8')) as { clients: DataClient[] };
+
+  for (const client of raw.clients) {
+    const quotaType = mapDataJsonQuota(client.quota) as QuotaType;
+    const cpf = client.document.replace(/\D/g, '');
+    const party = await prisma.party.upsert({
+      where: { cpfCnpj: cpf },
+      update: {
+        legalName: client.name.trim(),
+        status: 'aprovado',
+        approvedAt: new Date(),
+      },
+      create: {
+        type: 'pf',
+        cpfCnpj: cpf,
+        legalName: client.name.trim(),
+        status: 'aprovado',
+        riskLevel: 'baixo',
+        approvedAt: new Date(),
+        expiresAt: new Date(Date.now() + 365 * 24 * 60 * 60 * 1000),
+      },
+    });
+
+    await prisma.partyContact.deleteMany({ where: { partyId: party.id } });
+    await prisma.partyContact.create({
+      data: {
+        partyId: party.id,
+        email: client.email,
+        phone: client.phone,
+        isPrimary: true,
+      },
+    });
+
+    await prisma.cotista.upsert({
+      where: { partyId: party.id },
+      update: {},
+      create: {
+        partyId: party.id,
+        investorProfile: 'conservador',
+        suitabilityResult: 'conservador',
+      },
+    });
+
+    await prisma.partyFundLink.upsert({
+      where: {
+        partyId_fundId_quotaType: {
+          partyId: party.id,
+          fundId,
+          quotaType,
+        },
+      },
+      update: {
+        quotaCount: client.totalQuotas,
+        quotaAmount: client.investment,
+        initialInvestment: client.investment,
+        currentPrincipal: client.investment,
+        contractStartDate: parseBrDate(client.initialDate),
+        contractEndDate: parseBrDate(client.finalDate),
+      },
+      create: {
+        partyId: party.id,
+        fundId,
+        quotaType,
+        quotaCount: client.totalQuotas,
+        quotaAmount: client.investment,
+        initialInvestment: client.investment,
+        currentPrincipal: client.investment,
+        contractStartDate: parseBrDate(client.initialDate),
+        contractEndDate: parseBrDate(client.finalDate),
+      },
+    });
+  }
+}
 
 async function main() {
   for (const p of PERMISSIONS) {
@@ -197,28 +315,6 @@ async function main() {
   const permMap = Object.fromEntries(
     (await prisma.permission.findMany()).map((p) => [p.key, p.id]),
   );
-
-  for (const [groupName, keys] of Object.entries(GROUP_PERMISSIONS)) {
-    const group = await prisma.permissionGroup.upsert({
-      where: { name: groupName },
-      update: {},
-      create: {
-        name: groupName,
-        description: groupName,
-        mfaRequired: ['Administrador', 'Compliance', 'Gestão', 'Fiduciária'].includes(groupName),
-        isSystem: true,
-      },
-    });
-
-    await prisma.groupPermission.deleteMany({ where: { groupId: group.id } });
-    for (const key of keys) {
-      const permissionId = permMap[key];
-      if (!permissionId) continue;
-      await prisma.groupPermission.create({
-        data: { groupId: group.id, permissionId, granted: true },
-      });
-    }
-  }
 
   for (const item of MENU_ITEMS) {
     const requiredPermissionId = permMap[item.perm];
@@ -243,10 +339,6 @@ async function main() {
     });
   }
 
-  const groups = Object.fromEntries(
-    (await prisma.permissionGroup.findMany()).map((g) => [g.name, g.id]),
-  );
-
   for (const u of SEED_USERS) {
     const user = await prisma.user.upsert({
       where: { email: u.email },
@@ -258,13 +350,18 @@ async function main() {
         mfaRequired: false,
       },
     });
-    const groupId = groups[u.group];
-    if (groupId) {
-      await prisma.userGroup.upsert({
-        where: { userId_groupId: { userId: user.id, groupId } },
-        update: {},
-        create: { userId: user.id, groupId },
-      });
+
+    if (!u.isAdmin) {
+      const keys = PROFILE_PERMISSIONS[u.profile] ?? [];
+      for (const key of keys) {
+        const permissionId = permMap[key];
+        if (!permissionId) continue;
+        await prisma.userPermissionOverride.upsert({
+          where: { userId_permissionId: { userId: user.id, permissionId } },
+          update: { granted: true },
+          create: { userId: user.id, permissionId, granted: true },
+        });
+      }
     }
   }
 
@@ -288,6 +385,70 @@ async function main() {
       update: { minPercentage: rule.minPercentage },
       create: rule,
     });
+  }
+
+  const NEXT_CORE_CNPJ = '68057459000165';
+  const LEGACY_DEMO_CNPJ = '00000000000191';
+
+  const nextCoreData = {
+    name: 'Next Core FIDC',
+    legalName: 'NEXT CORE FUNDO DE INVESTIMENTO EM DIREITOS CREDITÓRIOS RESPONSABILIDADE LIMITADA',
+    cnpj: NEXT_CORE_CNPJ,
+    modality: 'fidc' as const,
+    status: 'ativo' as const,
+    targetAudience: 'Investidores qualificados',
+    inceptionDate: new Date('2025-10-16'),
+    website: 'https://nextcorefidc.com.br',
+    registeredAddress: 'Av. Brigadeiro Faria Lima, 3900, Conj. 601, Itaim Bibi, São Paulo/SP',
+    description:
+      'FIDC com cotas sênior focadas em operações de renda variável, com rentabilidade alvo CDI+4% a CDI+5%.',
+    contactEmail: 'contato@nextcorefidc.com.br',
+    contactPhone: '+55 (11) 95610-1991',
+    regulatoryLimitsJson: { min_direitos_creditorios_pct: 67 },
+    extraInfoJson: {
+      regulator: 'CVM',
+      quotaClasses: [
+        {
+          name: 'Cota Sênior I',
+          targetYield: 'CDI + 4% a.a.',
+          termMonths: 12,
+          amortization: 'Mensal',
+          liquidity: 'Mensal',
+          risk: 'Baixo',
+          minAmount: 10000,
+        },
+        {
+          name: 'Cota Sênior II',
+          targetYield: 'CDI + 5% a.a.',
+          termMonths: 36,
+          amortization: 'No vencimento',
+          liquidity: 'No vencimento',
+          risk: 'Baixo',
+          minAmount: 10000,
+        },
+      ],
+    },
+  };
+
+  const existingFund =
+    (await prisma.fund.findUnique({ where: { cnpj: NEXT_CORE_CNPJ } })) ??
+    (await prisma.fund.findUnique({ where: { cnpj: LEGACY_DEMO_CNPJ } }));
+
+  const fund = existingFund
+    ? await prisma.fund.update({
+        where: { id: existingFund.id },
+        data: nextCoreData,
+      })
+    : await prisma.fund.create({ data: nextCoreData });
+
+  await seedCotistasFromDataJson(fund.id);
+
+  console.log('Seed base OK — iniciando backfill de rendimentos (BCB)...');
+  try {
+    const n = await backfillAllActiveYields();
+    console.log(`Backfill OK: ${n} registros de rendimento`);
+  } catch (err) {
+    console.warn('Backfill de yields falhou (rode npm run db:backfill-yields depois):', err);
   }
 
   console.log('Seed completed');
