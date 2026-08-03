@@ -2,17 +2,34 @@ import cron from 'node-cron';
 import { prisma } from '../db/index.js';
 import { runDailyYieldJob } from '../services/cotista-yield.service.js';
 
+const CRON_TZ = 'America/Sao_Paulo';
+
+/** Jobs diários 06:00 BRT — usable by scheduler and `npm run job:daily`. */
+export async function runDailyJobs(): Promise<void> {
+  console.log(`[job] daily 06:00 ${CRON_TZ} started`);
+  await checkOnboardingExpiration();
+  await checkCadastroExpiration();
+  await cadastroExpirationAlert();
+  try {
+    await runDailyYieldJob();
+  } catch (err) {
+    console.error('[job] falha ao gravar yields diários', err);
+    throw err;
+  }
+  console.log(`[job] daily 06:00 ${CRON_TZ} finished`);
+}
+
 export function registerScheduledJobs() {
-  cron.schedule('0 6 * * *', async () => {
-    await checkOnboardingExpiration();
-    await checkCadastroExpiration();
-    await cadastroExpirationAlert();
-    try {
-      await runDailyYieldJob();
-    } catch (err) {
-      console.error('[job] falha ao gravar yields diários', err);
-    }
-  });
+  cron.schedule(
+    '0 6 * * *',
+    () => {
+      void runDailyJobs().catch((err) => {
+        console.error('[job] daily jobs failed', err);
+      });
+    },
+    { timezone: CRON_TZ },
+  );
+  console.log(`[scheduler] registered daily jobs at 06:00 ${CRON_TZ}`);
 }
 
 async function checkOnboardingExpiration() {
@@ -65,4 +82,4 @@ async function cadastroExpirationAlert() {
   }
 }
 
-export { checkOnboardingExpiration, checkCadastroExpiration, cadastroExpirationAlert };
+export { checkOnboardingExpiration, checkCadastroExpiration, cadastroExpirationAlert, CRON_TZ };

@@ -1,0 +1,108 @@
+{
+  "clients": [
+    {
+      "id": 2,
+      "name": "Fábio Pereira Lopes de Medeiros",
+      "document": "02272553800",
+      "email": "fabmed2000@gmail.com",
+      "phone": "11976205830",
+      "investment": 10000,
+      "totalQuotas": 1,
+      "initialDate": "22/12/2025",
+      "finalDate": "01/06/2027",
+      "mock": false,
+      "quota": "sri"
+    },
+    {
+      "id": 3,
+      "name": "Amadis Sobral dos Santos",
+      "document": "80587488891",
+      "email": "amadissobrals@gmail.com",
+      "phone": "11998000238",
+      "investment": 350000,
+      "totalQuotas": 35,
+      "initialDate": "06/01/2026",
+      "finalDate": "06/01/2027",
+      "mock": false,
+      "quota": "sri"
+    },
+    {
+      "id": 4,
+      "name": "José Domingos Ferrari Filho",
+      "document": "27098469858",
+      "email": "josedomingos@eletroferengenharia.com.br",
+      "phone": "19981811610",
+      "investment": 1000000,
+      "totalQuotas": 100,
+      "initialDate": "23/01/2026",
+      "finalDate": "23/01/2029",
+      "mock": false,
+      "quota": "srii"
+    },
+    {
+      "id": 5,
+      "name": "Luiz Gustavo Ferrari",
+      "document": "29644513894",
+      "email": "luizgustavo@eletroferengenharia.com.br",
+      "phone": "19981896248",
+      "investment": 1000000,
+      "totalQuotas": 100,
+      "initialDate": "23/01/2026",
+      "finalDate": "23/01/2029",
+      "mock": false,
+      "quota": "srii"
+    },
+    {
+      "id": 6,
+      "name": "Sandra Mara Ferrari Alborgheti",
+      "document": "26954582824",
+      "email": "sandra@eletroferengenharia.com.br",
+      "phone": "19993420098",
+      "investment": 1000000,
+      "totalQuotas": 100,
+      "initialDate": "23/01/2026",
+      "finalDate": "23/01/2029",
+      "mock": false,
+      "quota": "srii"
+    },
+    {
+      "id": 7,
+      "name": "José Domingos Ferrari",
+      "document": "55243622834",
+      "email": "ferrari@eletroferengenharia.com.br",
+      "phone": "19981811611",
+      "investment": 1000000,
+      "totalQuotas": 100,
+      "initialDate": "25/02/2026",
+      "finalDate": "25/02/2029",
+      "mock": false,
+      "quota": "srii"
+    },
+    {
+      "id": 8,
+      "name": "Luciane Aparecida Turibio",
+      "document": "05674184801",
+      "email": "lu_turibio@hotmail.com",
+      "phone": "19996770980",
+      "investment": 50000,
+      "totalQuotas": 5,
+      "initialDate": "03/03/2026",
+      "finalDate": "03/03/2029",
+      "mock": false,
+      "quota": "srii"
+    },
+    {
+      "id": 10,
+      "name": "Jose Carlos Fontana ",
+      "document": "29528020925",
+      "email": "zecafontana@gmail.com",
+      "phone": "45999785305",
+      "investment": 200000,
+      "totalQuotas": 20,
+      "initialDate": "28/05/2026",
+      "finalDate": "28/05/2027",
+      "mock": false,
+      "quota": "sri"
+    }
+  ]
+}

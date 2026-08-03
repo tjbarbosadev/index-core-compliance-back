@@ -21,6 +21,7 @@
     "db:push": "prisma db push",
     "db:seed": "tsx prisma/seed.ts",
     "db:backfill-yields": "tsx prisma/backfill-yields.ts",
+    "job:daily": "tsx prisma/run-daily-job.ts",
     "partner:create": "tsx prisma/partner-cli.ts create",
     "partner:rotate": "tsx prisma/partner-cli.ts rotate",
     "partner:list": "tsx prisma/partner-cli.ts list",

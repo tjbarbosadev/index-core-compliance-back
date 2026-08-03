@@ -236,8 +236,8 @@ function parseBrDate(d: string): Date {
   return parseYYYYMMDD(`${yyyy}-${mm}-${dd}`);
 }
 
-async function seedCotistasFromDataJson(fundId: string) {
-  const dataPath = join(__dirname, '../../docs/data.json');
+async function seedCotistasFromDataJson(fundId: string): Promise<number> {
+  const dataPath = join(__dirname, 'data/clients.json');
   const raw = JSON.parse(readFileSync(dataPath, 'utf-8')) as { clients: DataClient[] };
 
   for (const client of raw.clients) {
@@ -310,6 +310,8 @@ async function seedCotistasFromDataJson(fundId: string) {
       },
     });
   }
+
+  return raw.clients.length;
 }
 
 async function main() {
@@ -452,7 +454,8 @@ async function main() {
       })
     : await prisma.fund.create({ data: nextCoreData });
 
-  await seedCotistasFromDataJson(fund.id);
+  const cotistasCount = await seedCotistasFromDataJson(fund.id);
+  console.log(`Seed cotistas OK: ${cotistasCount} cliente(s) de prisma/data/clients.json`);
 
   console.log('Seed base OK — iniciando backfill de rendimentos (BCB)...');
   try {
@@ -462,7 +465,14 @@ async function main() {
     console.warn('Backfill de yields falhou (rode npm run db:backfill-yields depois):', err);
   }
 
-  console.log('Seed completed');
+  const [usersCount, linksCount, yieldsCount] = await Promise.all([
+    prisma.user.count(),
+    prisma.partyFundLink.count(),
+    prisma.cotistaDailyYield.count(),
+  ]);
+  console.log(
+    `Seed completed — users=${usersCount} fundLinks=${linksCount} dailyYields=${yieldsCount}`,
+  );
 }
 
 main()
