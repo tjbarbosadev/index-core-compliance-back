@@ -31,9 +31,13 @@ jobs:
 
       - name: Typecheck
         run: npm run typecheck
+        env:
+          DATABASE_URL: postgresql://opcore:opcore@127.0.0.1:5432/opcore
 
       - name: Test
         run: npm run test
+        env:
+          DATABASE_URL: postgresql://opcore:opcore@127.0.0.1:5432/opcore
 
       - name: Build
         run: npm run build
