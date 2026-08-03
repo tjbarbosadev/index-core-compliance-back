@@ -3,6 +3,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { FundModality, AssetClass, type QuotaType } from '@prisma/client';
 import { prisma } from '../src/db/index.js';
+import { hashPassword } from '../src/services/auth.service.js';
 import { mapDataJsonQuota, parseYYYYMMDD } from '../src/services/quota-calculator.js';
 import { backfillAllActiveYields } from '../src/services/cotista-yield.service.js';
 
@@ -180,10 +181,18 @@ const MENU_ITEMS = [
   },
 ];
 
+const SEED_DEFAULT_PASSWORD = 'Mudar@123';
+
 const SEED_USERS = [
   {
     email: 'admin@indexcore.local',
     name: 'Administrador',
+    profile: 'Administrador',
+    isAdmin: true,
+  },
+  {
+    email: 'thiago.barbosa@ipebank.com.br',
+    name: 'Thiago Barbosa',
     profile: 'Administrador',
     isAdmin: true,
   },
@@ -339,14 +348,16 @@ async function main() {
     });
   }
 
+  const seedPasswordHash = await hashPassword(SEED_DEFAULT_PASSWORD);
   for (const u of SEED_USERS) {
     const user = await prisma.user.upsert({
       where: { email: u.email },
-      update: { name: u.name, isAdmin: u.isAdmin },
+      update: { name: u.name, isAdmin: u.isAdmin, passwordHash: seedPasswordHash },
       create: {
         email: u.email,
         name: u.name,
         isAdmin: u.isAdmin,
+        passwordHash: seedPasswordHash,
         mfaRequired: false,
       },
     });

@@ -1,15 +1,33 @@
 import crypto from 'node:crypto';
+import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import { prisma } from '../db/index.js';
 import { env } from '../lib/env.js';
 import { resolveUserPermissions } from './permission.service.js';
 
 const COOKIE_NAME = 'indexcore_session';
+const BCRYPT_ROUNDS = 10;
 
 export type SessionPayload = {
   sessionId: string;
   userId: string;
 };
+
+export function hashPassword(plain: string): Promise<string> {
+  return bcrypt.hash(plain, BCRYPT_ROUNDS);
+}
+
+export function verifyPassword(plain: string, passwordHash: string): Promise<boolean> {
+  return bcrypt.compare(plain, passwordHash);
+}
+
+export async function setUserPassword(userId: string, plain: string) {
+  const passwordHash = await hashPassword(plain);
+  await prisma.user.update({
+    where: { id: userId },
+    data: { passwordHash },
+  });
+}
 
 export function hashToken(token: string): string {
   return crypto.createHash('sha256').update(token).digest('hex');
@@ -63,10 +81,24 @@ export async function getUserFromSession(sessionId: string, userId: string) {
   return session?.user ?? null;
 }
 
-export async function loginByUserEmail(email: string, ip?: string, userAgent?: string) {
+export async function loginWithPassword(
+  email: string,
+  password: string,
+  ip?: string,
+  userAgent?: string,
+) {
   const user = await prisma.user.findUnique({ where: { email } });
-  if (!user) throw new Error('Usuário não encontrado');
-  if (user.status !== 'active') throw new Error('Usuário inativo');
+  if (!user?.passwordHash) {
+    throw new Error('Credenciais inválidas');
+  }
+  if (user.status !== 'active') {
+    throw new Error('Usuário inativo');
+  }
+
+  const ok = await verifyPassword(password, user.passwordHash);
+  if (!ok) {
+    throw new Error('Credenciais inválidas');
+  }
 
   const { sessionId } = await createSession(user.id, ip, userAgent);
   return { user, sessionId };

@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { router, protectedProcedure, adminProcedure } from '../trpc/procedures.js';
 import { prisma } from '../db/index.js';
+import { setUserPassword } from '../services/auth.service.js';
 import {
   TAB_ACCESS_MAP,
   TAB_LABELS,
@@ -54,6 +55,7 @@ export const usersRouter = router({
       z.object({
         email: z.string().email(),
         name: z.string().min(2),
+        password: z.string().min(8),
         tabs: tabAccessSchema,
       }),
     )
@@ -61,10 +63,23 @@ export const usersRouter = router({
       createUserWithTabAccess({
         email: input.email,
         name: input.name,
+        password: input.password,
         tabs: input.tabs as Partial<Record<TabKey, TabAccessLevel>>,
         createdBy: ctx.user.id,
       }),
     ),
+
+  setPassword: adminProcedure
+    .input(
+      z.object({
+        userId: z.string().uuid(),
+        password: z.string().min(8),
+      }),
+    )
+    .mutation(async ({ input }) => {
+      await setUserPassword(input.userId, input.password);
+      return { success: true };
+    }),
 
   setTabAccess: adminProcedure
     .input(

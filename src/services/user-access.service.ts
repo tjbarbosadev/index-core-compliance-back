@@ -1,5 +1,6 @@
 import { prisma } from '../db/index.js';
 import { APP_ERROR } from '../lib/errors.js';
+import { hashPassword } from './auth.service.js';
 import { resolveUserPermissions } from './permission.service.js';
 
 /** Abas do admin e permissões read/write correspondentes. */
@@ -102,16 +103,20 @@ export async function setUserTabAccess(
 export async function createUserWithTabAccess(input: {
   email: string;
   name: string;
+  password: string;
   tabs: Partial<Record<TabKey, TabAccessLevel>>;
   createdBy?: string;
 }) {
   const existing = await prisma.user.findUnique({ where: { email: input.email } });
   if (existing) throw APP_ERROR.CONFLICT('E-mail já cadastrado');
 
+  const passwordHash = await hashPassword(input.password);
+
   const user = await prisma.user.create({
     data: {
       email: input.email,
       name: input.name,
+      passwordHash,
       isAdmin: false,
       status: 'active',
     },

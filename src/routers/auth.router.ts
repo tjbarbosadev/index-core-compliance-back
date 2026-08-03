@@ -10,7 +10,7 @@ export const authRouter = router({
     if (ctx.sessionId) {
       await logoutUser(ctx.sessionId);
     }
-    ctx.res.clearCookie(COOKIE_NAME, { httpOnly: true, sameSite: 'strict' });
+    ctx.res.clearCookie(COOKIE_NAME, { httpOnly: true, sameSite: 'lax' });
     return { success: true };
   }),
 
