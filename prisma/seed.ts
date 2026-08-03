@@ -240,20 +240,27 @@ async function seedCotistasFromDataJson(fundId: string): Promise<number> {
   const dataPath = join(__dirname, 'data/clients.json');
   const raw = JSON.parse(readFileSync(dataPath, 'utf-8')) as { clients: DataClient[] };
 
+  const byCpf = new Map<string, DataClient[]>();
   for (const client of raw.clients) {
-    const quotaType = mapDataJsonQuota(client.quota) as QuotaType;
     const cpf = client.document.replace(/\D/g, '');
+    const list = byCpf.get(cpf) ?? [];
+    list.push(client);
+    byCpf.set(cpf, list);
+  }
+
+  for (const [cpf, rows] of byCpf) {
+    const primary = rows[0]!;
     const party = await prisma.party.upsert({
       where: { cpfCnpj: cpf },
       update: {
-        legalName: client.name.trim(),
+        legalName: primary.name.trim(),
         status: 'aprovado',
         approvedAt: new Date(),
       },
       create: {
         type: 'pf',
         cpfCnpj: cpf,
-        legalName: client.name.trim(),
+        legalName: primary.name.trim(),
         status: 'aprovado',
         riskLevel: 'baixo',
         approvedAt: new Date(),
@@ -265,8 +272,8 @@ async function seedCotistasFromDataJson(fundId: string): Promise<number> {
     await prisma.partyContact.create({
       data: {
         partyId: party.id,
-        email: client.email,
-        phone: client.phone,
+        email: primary.email,
+        phone: primary.phone,
         isPrimary: true,
       },
     });
@@ -281,37 +288,27 @@ async function seedCotistasFromDataJson(fundId: string): Promise<number> {
       },
     });
 
-    await prisma.partyFundLink.upsert({
-      where: {
-        partyId_fundId_quotaType: {
+    // Recreate all positions for this party+fund from seed rows (idempotent).
+    await prisma.partyFundLink.deleteMany({ where: { partyId: party.id, fundId } });
+    for (const client of rows) {
+      const quotaType = mapDataJsonQuota(client.quota) as QuotaType;
+      await prisma.partyFundLink.create({
+        data: {
           partyId: party.id,
           fundId,
           quotaType,
+          quotaCount: client.totalQuotas,
+          quotaAmount: client.investment,
+          initialInvestment: client.investment,
+          currentPrincipal: client.investment,
+          contractStartDate: parseBrDate(client.initialDate),
+          contractEndDate: parseBrDate(client.finalDate),
         },
-      },
-      update: {
-        quotaCount: client.totalQuotas,
-        quotaAmount: client.investment,
-        initialInvestment: client.investment,
-        currentPrincipal: client.investment,
-        contractStartDate: parseBrDate(client.initialDate),
-        contractEndDate: parseBrDate(client.finalDate),
-      },
-      create: {
-        partyId: party.id,
-        fundId,
-        quotaType,
-        quotaCount: client.totalQuotas,
-        quotaAmount: client.investment,
-        initialInvestment: client.investment,
-        currentPrincipal: client.investment,
-        contractStartDate: parseBrDate(client.initialDate),
-        contractEndDate: parseBrDate(client.finalDate),
-      },
-    });
+      });
+    }
   }
 
-  return raw.clients.length;
+  return byCpf.size;
 }
 
 async function main() {

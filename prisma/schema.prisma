@@ -506,7 +506,7 @@ model PartyFundLink {
   dailyYields    CotistaDailyYield[]
   amortizations  CotistaAmortization[]
 
-  @@unique([partyId, fundId, quotaType])
+  @@index([partyId])
   @@index([fundId])
   @@map("party_fund_links")
 }

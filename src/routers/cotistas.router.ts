@@ -3,9 +3,12 @@ import { router, permissionProcedure } from '../trpc/procedures.js';
 import * as cotistaService from '../services/cotista.service.js';
 
 const positionSchema = z.object({
+  id: z.string().uuid().optional(),
   fundId: z.string().uuid(),
   quotaType: z.enum(['senior_i', 'senior_ii']),
   quotaCount: z.number().int().positive(),
+  contractStartDate: z.string().nullable().optional(),
+  contractEndDate: z.string().nullable().optional(),
 });
 
 const cotistaWriteSchema = z.object({
@@ -14,8 +17,6 @@ const cotistaWriteSchema = z.object({
   email: z.string().email().optional().or(z.literal('')),
   phone: z.string().optional(),
   positions: z.array(positionSchema).min(1),
-  contractStartDate: z.string().nullable().optional(),
-  contractEndDate: z.string().nullable().optional(),
 });
 
 export const cotistasRouter = router({
@@ -41,6 +42,7 @@ export const cotistasRouter = router({
           .regex(/^\d{4}-\d{2}$/)
           .optional(),
         limit: z.number().int().positive().max(365).optional(),
+        partyFundLinkId: z.string().uuid().optional(),
       }),
     )
     .query(({ input }) =>
@@ -48,12 +50,18 @@ export const cotistasRouter = router({
         date: input.date,
         yearMonth: input.yearMonth,
         limit: input.limit,
+        partyFundLinkId: input.partyFundLinkId,
       }),
     ),
 
   listAmortizations: permissionProcedure('cotistas.read')
-    .input(z.object({ id: z.string().uuid() }))
-    .query(({ input }) => cotistaService.getCotistaAmortizations(input.id)),
+    .input(
+      z.object({
+        id: z.string().uuid(),
+        partyFundLinkId: z.string().uuid().optional(),
+      }),
+    )
+    .query(({ input }) => cotistaService.getCotistaAmortizations(input.id, input.partyFundLinkId)),
 
   create: permissionProcedure('cotistas.write')
     .input(cotistaWriteSchema)

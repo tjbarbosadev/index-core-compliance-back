@@ -10,6 +10,14 @@ import { getVisualizationDate, toYYYYMMDD } from '../services/quota-calculator.j
 
 type PartnerRequest = Request & { partner?: AuthenticatedPartner };
 
+/** IndexCore PositionPublic uses jr | sr. */
+function mapQuotaToIndexCore(quotaType: string | null | undefined): 'jr' | 'sr' | null {
+  if (quotaType === 'senior_i') return 'jr';
+  if (quotaType === 'senior_ii') return 'sr';
+  return null;
+}
+
+/** Legacy OpCore labels. */
 function mapQuotaToLegacy(quotaType: string | null | undefined): string | null {
   if (quotaType === 'senior_i') return 'sri';
   if (quotaType === 'senior_ii') return 'srii';
@@ -17,17 +25,36 @@ function mapQuotaToLegacy(quotaType: string | null | undefined): string | null {
 }
 
 function toPublicCotista(full: Awaited<ReturnType<typeof cotistaService.mapCotistaFull>>) {
+  const positions = full.positions.map((p) => ({
+    id: p.id,
+    quota: mapQuotaToIndexCore(p.quotaType),
+    quotaLegacy: mapQuotaToLegacy(p.quotaType),
+    quotaType: p.quotaType,
+    quotaTypeLabel: p.quotaTypeLabel,
+    investment: p.initialInvestment,
+    totalQuotas: p.quotaCount,
+    initialDate: p.contractStartDate,
+    finalDate: p.contractEndDate,
+    fundId: p.fundId,
+    fundName: p.fundName,
+    latestYield: p.latestYield ?? null,
+  }));
+
   return {
     id: full.id,
     name: full.legalName,
     document: full.cpfCnpj,
     email: full.email ?? null,
     phone: full.phone ?? null,
+    positions,
+    /** @deprecated Prefer positions[]. Aggregated totals. */
     investment: full.initialInvestment ?? 0,
     totalQuotas: full.quotaCount ?? 0,
+    /** @deprecated Prefer positions[]. Summary from first position. */
     initialDate: full.contractStartDate,
     finalDate: full.contractEndDate,
-    quota: mapQuotaToLegacy(full.quotaType),
+    quota: mapQuotaToIndexCore(full.quotaType),
+    quotaLegacy: mapQuotaToLegacy(full.quotaType),
     quotaTypeLabel: full.quotaTypeLabel,
     status: full.status,
     fundId: full.fundId,
@@ -90,6 +117,11 @@ function logPartnerAccess(req: PartnerRequest, res: Response, next: NextFunction
   next();
 }
 
+function positionIdQuery(req: Request): string | undefined {
+  const raw = req.query.positionId ?? req.query.partyFundLinkId;
+  return typeof raw === 'string' && raw.length > 0 ? raw : undefined;
+}
+
 export function registerV1Routes(app: Express) {
   app.get('/v1/cotistas', requirePartner, logPartnerAccess, async (_req, res) => {
     try {
@@ -126,6 +158,7 @@ export function registerV1Routes(app: Express) {
       const result = await cotistaService.getCotistaYields(req.params.id, {
         date: typeof req.query.date === 'string' ? req.query.date : undefined,
         limit: req.query.limit ? Number(req.query.limit) : 90,
+        partyFundLinkId: positionIdQuery(req),
       });
       res.json(result);
     } catch (err) {
@@ -136,7 +169,10 @@ export function registerV1Routes(app: Express) {
 
   app.get('/v1/cotistas/:id/amortizations', requirePartner, logPartnerAccess, async (req, res) => {
     try {
-      const items = await cotistaService.getCotistaAmortizations(req.params.id);
+      const items = await cotistaService.getCotistaAmortizations(
+        req.params.id,
+        positionIdQuery(req),
+      );
       res.json({ items });
     } catch (err) {
       console.error('[v1/cotistas/:id/amortizations]', err);
