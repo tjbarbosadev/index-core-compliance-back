@@ -6,6 +6,7 @@ import {
   TAB_ACCESS_MAP,
   TAB_LABELS,
   createUserWithTabAccess,
+  deactivateUser,
   listUsersWithTabAccess,
   setUserTabAccess,
   type TabAccessLevel,
@@ -80,6 +81,10 @@ export const usersRouter = router({
       await setUserPassword(input.userId, input.password);
       return { success: true };
     }),
+
+  deactivate: adminProcedure
+    .input(z.object({ userId: z.string().uuid() }))
+    .mutation(({ input, ctx }) => deactivateUser(input.userId, ctx.user.id)),
 
   setTabAccess: adminProcedure
     .input(

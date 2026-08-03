@@ -127,6 +127,7 @@ export async function createUserWithTabAccess(input: {
 
 export async function listUsersWithTabAccess() {
   const users = await prisma.user.findMany({
+    where: { status: 'active' },
     orderBy: { name: 'asc' },
   });
 
@@ -144,4 +145,35 @@ export async function listUsersWithTabAccess() {
       };
     }),
   );
+}
+
+/** Soft delete (LGPD): marca inactive, revoga sessões e tokens de reset. */
+export async function deactivateUser(userId: string, actorUserId: string) {
+  if (userId === actorUserId) {
+    throw APP_ERROR.BAD_REQUEST('Não é possível remover o próprio usuário');
+  }
+
+  const user = await prisma.user.findUnique({ where: { id: userId } });
+  if (!user) throw APP_ERROR.NOT_FOUND('Usuário');
+  if (user.status !== 'active') {
+    throw APP_ERROR.BAD_REQUEST('Usuário já está inativo');
+  }
+
+  const now = new Date();
+  await prisma.$transaction([
+    prisma.user.update({
+      where: { id: userId },
+      data: { status: 'inactive' },
+    }),
+    prisma.userSession.updateMany({
+      where: { userId, revokedAt: null },
+      data: { revokedAt: now },
+    }),
+    prisma.passwordResetToken.updateMany({
+      where: { userId, usedAt: null },
+      data: { usedAt: now },
+    }),
+  ]);
+
+  return { success: true };
 }

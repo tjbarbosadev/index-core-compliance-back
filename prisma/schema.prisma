@@ -242,12 +242,28 @@ model User {
   updatedAt    DateTime   @updatedAt @map("updated_at") @db.Timestamptz
 
   sessions            UserSession[]
+  passwordResetTokens PasswordResetToken[]
   permissionOverrides UserPermissionOverride[]
   auditLogs           AuditLog[]
   documentsUploaded   Document[]               @relation("DocumentUploader")
   documentsValidated  Document[]               @relation("DocumentValidator")
 
   @@map("users")
+}
+
+model PasswordResetToken {
+  id        String    @id @default(uuid()) @db.Uuid
+  userId    String    @map("user_id") @db.Uuid
+  tokenHash String    @map("token_hash") @db.VarChar(255)
+  expiresAt DateTime  @map("expires_at") @db.Timestamptz
+  usedAt    DateTime? @map("used_at") @db.Timestamptz
+  createdAt DateTime  @default(now()) @map("created_at") @db.Timestamptz
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([tokenHash])
+  @@index([userId])
+  @@map("password_reset_tokens")
 }
 
 model UserSession {

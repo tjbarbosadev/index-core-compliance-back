@@ -9,10 +9,19 @@ function parseCorsOrigins(): string[] {
   return [single];
 }
 
+function resolveWebUrl(): string {
+  const explicit = process.env.WEB_URL?.trim();
+  if (explicit) return explicit.replace(/\/$/, '');
+  const origins = parseCorsOrigins();
+  return (origins[0] ?? 'http://localhost:5173').replace(/\/$/, '');
+}
+
 export const env = {
   port: Number(process.env.PORT ?? 3001),
   /** URL pública da API (monta uploadUrl para o browser). */
   publicApiUrl: (process.env.PUBLIC_API_URL ?? 'http://localhost:3001').replace(/\/$/, ''),
+  /** URL pública do front (links de e-mail, ex.: redefinir senha). */
+  webUrl: resolveWebUrl(),
   /** Diretório base para arquivos de documentos no servidor. */
   storagePath: process.env.STORAGE_PATH ?? './storage',
   /** Allowlist de origins dos sites próprios (admin.opcore, IndexCore, localhost). */
