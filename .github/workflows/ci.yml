@@ -1,18 +1,14 @@
 name: CI
 
 on:
-  push:
-    branches: [main]
   pull_request:
+    branches: [main]
+  push:
     branches: [main]
 
 jobs:
   quality:
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: api
-
     steps:
       - uses: actions/checkout@v4
 
@@ -20,10 +16,12 @@ jobs:
         with:
           node-version: '22'
           cache: npm
-          cache-dependency-path: api/package-lock.json
 
       - name: Install
         run: npm ci
+        env:
+          HUSKY: '0'
+          DATABASE_URL: postgresql://opcore:opcore@127.0.0.1:5432/opcore
 
       - name: Lint
         run: npm run lint
@@ -39,3 +37,5 @@ jobs:
 
       - name: Build
         run: npm run build
+        env:
+          DATABASE_URL: postgresql://opcore:opcore@127.0.0.1:5432/opcore
