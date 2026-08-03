@@ -71,5 +71,5 @@ jobs:
         run: |
           PORT="${SSH_PORT:-22}"
           REMOTE_DIR="${DEPLOY_DIR:-~/projects/opcore/api}"
-          ssh -i ~/.ssh/deploy_key -p "$PORT" "$SSH_USER@$SSH_HOST" \
+          ssh -tt -i ~/.ssh/deploy_key -p "$PORT" "$SSH_USER@$SSH_HOST" \
             "cd ${REMOTE_DIR} && git fetch origin && git reset --hard origin/main && bash scripts/deploy.sh"

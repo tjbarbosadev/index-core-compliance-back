@@ -305,21 +305,25 @@ export async function approveOnboarding(
         },
       });
 
-      await tx.partyFundLink.upsert({
+      // N party_fund_links allowed per party (no unique party+fund+quotaType).
+      // Onboarding creates one link if none exists yet for this fund+type.
+      const quotaType = process.quotaType ?? 'senior_i';
+      const existingLink = await tx.partyFundLink.findFirst({
         where: {
-          partyId_fundId_quotaType: {
-            partyId: process.partyId,
-            fundId: process.fundId,
-            quotaType: process.quotaType ?? 'senior_i',
-          },
-        },
-        update: {},
-        create: {
           partyId: process.partyId,
           fundId: process.fundId,
-          quotaType: process.quotaType ?? 'senior_i',
+          quotaType,
         },
       });
+      if (!existingLink) {
+        await tx.partyFundLink.create({
+          data: {
+            partyId: process.partyId,
+            fundId: process.fundId,
+            quotaType,
+          },
+        });
+      }
 
       await tx.onboardingProcess.update({
         where: { id },
