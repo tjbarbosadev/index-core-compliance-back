@@ -1,6 +1,7 @@
 import { prisma } from '../db/index.js';
 import { APP_ERROR } from '../lib/errors.js';
-import { hashPassword } from './auth.service.js';
+import { hashPassword, issuePasswordResetUrl, normalizeEmail } from './auth.service.js';
+import { sendUserInviteEmail } from './email.service.js';
 import { resolveUserPermissions } from './permission.service.js';
 
 /** Abas do admin e permissões read/write correspondentes. */
@@ -50,6 +51,21 @@ export function deriveTabAccess(permissions: string[]): Record<TabKey, TabAccess
   return result;
 }
 
+async function userWithAccess(userId: string) {
+  const user = await prisma.user.findUnique({ where: { id: userId } });
+  if (!user) throw APP_ERROR.NOT_FOUND('Usuário');
+
+  const permissions = await resolveUserPermissions(userId);
+  return {
+    id: user.id,
+    email: user.email,
+    name: user.name,
+    isAdmin: user.isAdmin,
+    permissions,
+    tabAccess: deriveTabAccess(permissions),
+  };
+}
+
 export async function setUserTabAccess(
   userId: string,
   tabs: Partial<Record<TabKey, TabAccessLevel>>,
@@ -89,40 +105,54 @@ export async function setUserTabAccess(
     });
   }
 
-  const permissions = await resolveUserPermissions(userId);
-  return {
-    id: user.id,
-    email: user.email,
-    name: user.name,
-    isAdmin: user.isAdmin,
-    permissions,
-    tabAccess: deriveTabAccess(permissions),
-  };
+  return userWithAccess(userId);
 }
 
 export async function createUserWithTabAccess(input: {
   email: string;
   name: string;
-  password: string;
+  password?: string;
+  isAdmin?: boolean;
   tabs: Partial<Record<TabKey, TabAccessLevel>>;
   createdBy?: string;
 }) {
-  const existing = await prisma.user.findUnique({ where: { email: input.email } });
+  const email = normalizeEmail(input.email);
+  const existing = await prisma.user.findUnique({ where: { email } });
   if (existing) throw APP_ERROR.CONFLICT('E-mail já cadastrado');
 
-  const passwordHash = await hashPassword(input.password);
+  const isAdmin = Boolean(input.isAdmin);
+  const plainPassword = input.password?.trim();
+  const passwordHash = plainPassword ? await hashPassword(plainPassword) : null;
 
   const user = await prisma.user.create({
     data: {
-      email: input.email,
-      name: input.name,
+      email,
+      name: input.name.trim(),
       passwordHash,
-      isAdmin: false,
+      isAdmin,
       status: 'active',
     },
   });
 
-  return setUserTabAccess(user.id, input.tabs, input.createdBy);
+  let profile;
+  if (isAdmin) {
+    profile = await userWithAccess(user.id);
+  } else {
+    profile = await setUserTabAccess(user.id, input.tabs, input.createdBy);
+  }
+
+  let emailSent = false;
+  if (!passwordHash) {
+    const inviteUrl = await issuePasswordResetUrl(user.id);
+    const result = await sendUserInviteEmail({
+      to: user.email,
+      name: user.name,
+      inviteUrl,
+    });
+    emailSent = result.sent;
+  }
+
+  return { ...profile, emailSent };
 }
 
 export async function listUsersWithTabAccess() {

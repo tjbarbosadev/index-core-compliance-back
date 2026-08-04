@@ -36,4 +36,6 @@ export const env = {
   /** Resend — vazio em local; preencher no ambiente oficial. */
   resendApiKey: process.env.RESEND_API_KEY?.trim() || undefined,
   emailFrom: process.env.EMAIL_FROM ?? 'OpCore <noreply@opcore.com.br>',
+  /** Em produção, força log do link de reset/convite quando o envio falha. */
+  emailDebug: process.env.EMAIL_DEBUG === '1' || process.env.EMAIL_DEBUG === 'true',
 };

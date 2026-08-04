@@ -56,8 +56,16 @@ export const usersRouter = router({
       z.object({
         email: z.string().email(),
         name: z.string().min(2),
-        password: z.string().min(8),
-        tabs: tabAccessSchema,
+        password: z
+          .string()
+          .optional()
+          .transform((v) => {
+            const trimmed = v?.trim();
+            return trimmed ? trimmed : undefined;
+          })
+          .pipe(z.string().min(8).optional()),
+        isAdmin: z.boolean().optional().default(false),
+        tabs: tabAccessSchema.default({}),
       }),
     )
     .mutation(({ input, ctx }) =>
@@ -65,6 +73,7 @@ export const usersRouter = router({
         email: input.email,
         name: input.name,
         password: input.password,
+        isAdmin: input.isAdmin,
         tabs: input.tabs as Partial<Record<TabKey, TabAccessLevel>>,
         createdBy: ctx.user.id,
       }),

@@ -4,7 +4,7 @@ import jwt from 'jsonwebtoken';
 import { prisma } from '../db/index.js';
 import { env } from '../lib/env.js';
 import { resolveUserPermissions } from './permission.service.js';
-import { sendPasswordResetEmail } from './email.service.js';
+import { maskEmail, sendPasswordResetEmail } from './email.service.js';
 
 const COOKIE_NAME = 'indexcore_session';
 const BCRYPT_ROUNDS = 10;
@@ -13,6 +13,10 @@ export type SessionPayload = {
   sessionId: string;
   userId: string;
 };
+
+export function normalizeEmail(email: string): string {
+  return email.trim().toLowerCase();
+}
 
 export function hashPassword(plain: string): Promise<string> {
   return bcrypt.hash(plain, BCRYPT_ROUNDS);
@@ -88,7 +92,7 @@ export async function loginWithPassword(
   ip?: string,
   userAgent?: string,
 ) {
-  const user = await prisma.user.findUnique({ where: { email } });
+  const user = await prisma.user.findUnique({ where: { email: normalizeEmail(email) } });
   if (!user?.passwordHash) {
     throw new Error('Credenciais inválidas');
   }
@@ -116,28 +120,47 @@ const PASSWORD_RESET_TTL_MS = 60 * 60 * 1000;
 const FORGOT_PASSWORD_GENERIC_MESSAGE =
   'Se o e-mail estiver cadastrado, enviaremos instruções para redefinir a senha.';
 
-export async function requestPasswordReset(email: string): Promise<{ message: string }> {
-  const user = await prisma.user.findUnique({ where: { email } });
-  if (!user || user.status !== 'active' || !user.passwordHash) {
-    return { message: FORGOT_PASSWORD_GENERIC_MESSAGE };
-  }
-
+/** Cria token de redefinição/convite e retorna a URL pública. */
+export async function issuePasswordResetUrl(userId: string): Promise<string> {
   const rawToken = crypto.randomBytes(32).toString('hex');
   const expiresAt = new Date(Date.now() + PASSWORD_RESET_TTL_MS);
 
   await prisma.passwordResetToken.create({
     data: {
-      userId: user.id,
+      userId,
       tokenHash: hashToken(rawToken),
       expiresAt,
     },
   });
 
-  const resetUrl = `${env.webUrl}/redefinir-senha?token=${rawToken}`;
-  await sendPasswordResetEmail({
+  return `${env.webUrl}/redefinir-senha?token=${rawToken}`;
+}
+
+export async function requestPasswordReset(email: string): Promise<{ message: string }> {
+  const normalized = normalizeEmail(email);
+  const user = await prisma.user.findUnique({ where: { email: normalized } });
+
+  if (!user) {
+    console.info('[auth] forgot-password', { email: maskEmail(normalized), reason: 'no_user' });
+    return { message: FORGOT_PASSWORD_GENERIC_MESSAGE };
+  }
+  if (user.status !== 'active') {
+    console.info('[auth] forgot-password', { email: maskEmail(normalized), reason: 'inactive' });
+    return { message: FORGOT_PASSWORD_GENERIC_MESSAGE };
+  }
+
+  const resetUrl = await issuePasswordResetUrl(user.id);
+  const result = await sendPasswordResetEmail({
     to: user.email,
     name: user.name,
     resetUrl,
+  });
+
+  console.info('[auth] forgot-password', {
+    email: maskEmail(normalized),
+    reason: result.reason,
+    sent: result.sent,
+    hasPassword: Boolean(user.passwordHash),
   });
 
   return { message: FORGOT_PASSWORD_GENERIC_MESSAGE };
