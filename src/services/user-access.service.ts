@@ -1,7 +1,7 @@
 import { prisma } from '../db/index.js';
 import { APP_ERROR } from '../lib/errors.js';
 import { hashPassword, issuePasswordResetUrl, normalizeEmail } from './auth.service.js';
-import { sendUserInviteEmail } from './email.service.js';
+import { sendPasswordResetEmail, sendUserInviteEmail } from './email.service.js';
 import { resolveUserPermissions } from './permission.service.js';
 
 /** Abas do admin e permissões read/write correspondentes. */
@@ -152,7 +152,7 @@ export async function createUserWithTabAccess(input: {
     emailSent = result.sent;
   }
 
-  return { ...profile, emailSent };
+  return { ...profile, emailSent, hasPassword: Boolean(passwordHash) };
 }
 
 export async function listUsersWithTabAccess() {
@@ -170,11 +170,28 @@ export async function listUsersWithTabAccess() {
         name: u.name,
         isAdmin: u.isAdmin,
         status: u.status,
+        hasPassword: Boolean(u.passwordHash),
         permissions,
         tabAccess: deriveTabAccess(permissions),
       };
     }),
   );
+}
+
+/** Envia convite (sem senha) ou redefinição (com senha) para o usuário ativo. */
+export async function sendUserAccessEmail(userId: string): Promise<{ emailSent: boolean }> {
+  const user = await prisma.user.findUnique({ where: { id: userId } });
+  if (!user) throw APP_ERROR.NOT_FOUND('Usuário');
+  if (user.status !== 'active') {
+    throw APP_ERROR.BAD_REQUEST('Usuário inativo');
+  }
+
+  const url = await issuePasswordResetUrl(user.id);
+  const result = user.passwordHash
+    ? await sendPasswordResetEmail({ to: user.email, name: user.name, resetUrl: url })
+    : await sendUserInviteEmail({ to: user.email, name: user.name, inviteUrl: url });
+
+  return { emailSent: result.sent };
 }
 
 /** Soft delete (LGPD): marca inactive, revoga sessões e tokens de reset. */

@@ -9,11 +9,44 @@ function parseCorsOrigins(): string[] {
   return [single];
 }
 
+function isLocalhostUrl(url: string): boolean {
+  try {
+    const { hostname } = new URL(url);
+    return hostname === 'localhost' || hostname === '127.0.0.1';
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * URL pública do front para links de e-mail.
+ * Em produção, nunca usa localhost — mesmo se WEB_URL/CORS estiverem errados.
+ */
 function resolveWebUrl(): string {
-  const explicit = process.env.WEB_URL?.trim();
-  if (explicit) return explicit.replace(/\/$/, '');
-  const origins = parseCorsOrigins();
-  return (origins[0] ?? 'http://localhost:5173').replace(/\/$/, '');
+  const nodeEnv = process.env.NODE_ENV ?? 'development';
+  const explicit = process.env.WEB_URL?.trim().replace(/\/$/, '');
+  const origins = parseCorsOrigins().map((o) => o.replace(/\/$/, ''));
+  const publicOrigin = origins.find((o) => !isLocalhostUrl(o));
+
+  if (explicit && !(nodeEnv === 'production' && isLocalhostUrl(explicit))) {
+    return explicit;
+  }
+
+  if (explicit && nodeEnv === 'production' && isLocalhostUrl(explicit)) {
+    console.warn(
+      '[env] WEB_URL está como localhost em produção — ignorando e usando origem pública do CORS',
+    );
+  }
+
+  if (publicOrigin) return publicOrigin;
+
+  const fallback = origins[0] ?? 'http://localhost:5173';
+  if (nodeEnv === 'production' && isLocalhostUrl(fallback)) {
+    console.error(
+      '[env] Sem WEB_URL/CORS público — links de e-mail apontarão para localhost. Defina WEB_URL=https://admin.opcore.com.br',
+    );
+  }
+  return fallback;
 }
 
 export const env = {
@@ -35,7 +68,8 @@ export const env = {
   partnerTokenGraceHours: Number(process.env.PARTNER_TOKEN_GRACE_HOURS ?? 24),
   /** Resend — vazio em local; preencher no ambiente oficial. */
   resendApiKey: process.env.RESEND_API_KEY?.trim() || undefined,
-  emailFrom: process.env.EMAIL_FROM ?? 'OpCore <noreply@opcore.com.br>',
+  /** Evitar noreply@ — Resend recomenda endereço que aceite resposta. */
+  emailFrom: process.env.EMAIL_FROM ?? 'OpCore <acesso@opcore.com.br>',
   /** Em produção, força log do link de reset/convite quando o envio falha. */
   emailDebug: process.env.EMAIL_DEBUG === '1' || process.env.EMAIL_DEBUG === 'true',
 };

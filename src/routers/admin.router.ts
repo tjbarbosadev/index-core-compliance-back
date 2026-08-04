@@ -8,6 +8,7 @@ import {
   createUserWithTabAccess,
   deactivateUser,
   listUsersWithTabAccess,
+  sendUserAccessEmail,
   setUserTabAccess,
   type TabAccessLevel,
   type TabKey,
@@ -90,6 +91,10 @@ export const usersRouter = router({
       await setUserPassword(input.userId, input.password);
       return { success: true };
     }),
+
+  sendAccessEmail: adminProcedure
+    .input(z.object({ userId: z.string().uuid() }))
+    .mutation(({ input }) => sendUserAccessEmail(input.userId)),
 
   deactivate: adminProcedure
     .input(z.object({ userId: z.string().uuid() }))
