@@ -118,21 +118,34 @@ export async function createUserWithTabAccess(input: {
 }) {
   const email = normalizeEmail(input.email);
   const existing = await prisma.user.findUnique({ where: { email } });
-  if (existing) throw APP_ERROR.CONFLICT('E-mail já cadastrado');
+  if (existing?.status === 'active') {
+    throw APP_ERROR.CONFLICT('E-mail já cadastrado');
+  }
 
   const isAdmin = Boolean(input.isAdmin);
   const plainPassword = input.password?.trim();
   const passwordHash = plainPassword ? await hashPassword(plainPassword) : null;
+  const name = input.name.trim();
 
-  const user = await prisma.user.create({
-    data: {
-      email,
-      name: input.name.trim(),
-      passwordHash,
-      isAdmin,
-      status: 'active',
-    },
-  });
+  const user = existing
+    ? await prisma.user.update({
+        where: { id: existing.id },
+        data: {
+          name,
+          passwordHash,
+          isAdmin,
+          status: 'active',
+        },
+      })
+    : await prisma.user.create({
+        data: {
+          email,
+          name,
+          passwordHash,
+          isAdmin,
+          status: 'active',
+        },
+      });
 
   let profile;
   if (isAdmin) {
