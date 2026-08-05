@@ -8,6 +8,7 @@ import {
   getLatestYieldOnOrBefore,
   listAmortizations,
   listYields,
+  backfillPartyFundLinkYields,
 } from './cotista-yield.service.js';
 
 type GestorRow = {
@@ -496,6 +497,24 @@ function validatePositions(positions: CotistaWriteInput['positions']): Array<{
   });
 }
 
+async function backfillYieldsForCotista(cotistaId: string): Promise<void> {
+  const cotista = await prisma.cotista.findUnique({
+    where: { id: cotistaId },
+    include: { party: { include: { partyFundLinks: true } } },
+  });
+  if (!cotista) return;
+
+  for (const link of cotista.party.partyFundLinks) {
+    if (!link.contractStartDate) continue;
+    if (link.quotaType !== 'senior_i' && link.quotaType !== 'senior_ii') continue;
+    try {
+      await backfillPartyFundLinkYields(link.id);
+    } catch (err) {
+      console.warn(`[cotista] backfill de rendimentos falhou link=${link.id}:`, err);
+    }
+  }
+}
+
 export async function createCotista(input: CotistaWriteInput, userId: string, ip?: string) {
   const digits = normalizeDocument(input.cpfCnpj);
   if (digits.length < 11) throw APP_ERROR.BAD_REQUEST('CPF/CNPJ inválido');
@@ -567,6 +586,8 @@ export async function createCotista(input: CotistaWriteInput, userId: string, ip
     result: 'sucesso',
     ipAddress: ip,
   });
+
+  await backfillYieldsForCotista(createdId);
 
   return mapCotistaFull(createdId);
 }
@@ -683,6 +704,8 @@ export async function updateCotista(
     result: 'sucesso',
     ipAddress: ip,
   });
+
+  await backfillYieldsForCotista(id);
 
   return mapCotistaFull(id);
 }

@@ -1,4 +1,4 @@
-import 'dotenv/config';
+import './load-env.js';
 
 function parseCorsOrigins(): string[] {
   const multi = process.env.CORS_ORIGINS?.split(',')

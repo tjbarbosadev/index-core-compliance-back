@@ -2,7 +2,7 @@
  * One-shot: run daily scheduled jobs (expirations + yields).
  * Usage: npm run job:daily
  */
-import 'dotenv/config';
+import '../src/lib/load-env.js';
 import { runDailyJobs } from '../src/lib/scheduler.js';
 import { prisma } from '../src/db/index.js';
 
