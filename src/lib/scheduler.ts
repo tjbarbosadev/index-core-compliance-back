@@ -1,5 +1,6 @@
 import cron from 'node-cron';
 import { prisma } from '../db/index.js';
+import { runAmortizationAlertJob } from '../services/amortization-alert.service.js';
 import { runDailyYieldJob } from '../services/cotista-yield.service.js';
 
 const CRON_TZ = 'America/Sao_Paulo';
@@ -15,6 +16,11 @@ export async function runDailyJobs(): Promise<void> {
   } catch (err) {
     console.error('[job] falha ao gravar yields diários', err);
     throw err;
+  }
+  try {
+    await runAmortizationAlertJob();
+  } catch (err) {
+    console.error('[job] falha no alerta de amortização (dry-run)', err);
   }
   console.log(`[job] daily 06:00 ${CRON_TZ} finished`);
 }

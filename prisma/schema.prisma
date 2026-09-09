@@ -130,6 +130,18 @@ enum AmortizationKind {
   @@map("amortization_kind")
 }
 
+enum AmortizationAlertChannel {
+  telegram
+
+  @@map("amortization_alert_channel")
+}
+
+enum AmortizationAlertDeliveryStatus {
+  sent
+
+  @@map("amortization_alert_delivery_status")
+}
+
 enum AssetClass {
   direito_creditorio
   acoes
@@ -247,6 +259,7 @@ model User {
   auditLogs           AuditLog[]
   documentsUploaded   Document[]               @relation("DocumentUploader")
   documentsValidated  Document[]               @relation("DocumentValidator")
+  kycReports          KycReport[]
 
   @@map("users")
 }
@@ -355,6 +368,7 @@ model Party {
   documents          Document[]
   partyFundLinks     PartyFundLink[]
   onboardingProcesses OnboardingProcess[]
+  kycReports         KycReport[]
 
   @@index([status, expiresAt])
   @@map("parties")
@@ -625,6 +639,7 @@ model OnboardingProcess {
   fund                Fund                 @relation(fields: [fundId], references: [id])
   steps               OnboardingStep[]
   suitabilityResponse SuitabilityResponse?
+  kycReports          KycReport[]
 
   @@index([status])
   @@index([kind, status])
@@ -677,6 +692,35 @@ model ComplianceAlert {
 
   @@index([status, severity])
   @@map("compliance_alerts")
+}
+
+// ============================================================================
+// KYC REPORTS (opcore-compliance hub)
+// ============================================================================
+
+model KycReport {
+  id               String    @id @default(uuid()) @db.Uuid
+  document         String    @db.VarChar(18)
+  documentType     String    @map("document_type") @db.VarChar(4)
+  partyId          String?   @map("party_id") @db.Uuid
+  onboardingId     String?   @map("onboarding_id") @db.Uuid
+  riskLevel        RiskLevel @map("risk_level")
+  complianceStatus String    @map("compliance_status") @db.VarChar(40)
+  blocked          Boolean   @default(false)
+  dossierJson      Json      @map("dossier_json")
+  reportHash       String    @map("report_hash") @db.VarChar(80)
+  pdfUri           String?   @map("pdf_uri")
+  createdById      String    @map("created_by") @db.Uuid
+  createdAt        DateTime  @default(now()) @map("created_at") @db.Timestamptz
+
+  party      Party?             @relation(fields: [partyId], references: [id], onDelete: SetNull)
+  onboarding OnboardingProcess? @relation(fields: [onboardingId], references: [id], onDelete: SetNull)
+  createdBy  User               @relation(fields: [createdById], references: [id], onDelete: Restrict)
+
+  @@index([document])
+  @@index([partyId])
+  @@index([createdAt])
+  @@map("kyc_reports")
 }
 
 // ============================================================================
@@ -740,4 +784,19 @@ model ApiPartnerRequestLog {
 
   @@index([partnerId, createdAt(sort: Desc)])
   @@map("api_partner_request_logs")
+}
+
+// ============================================================================
+// AMORTIZATION ALERTS (admin notify)
+// ============================================================================
+
+model AmortizationAlertDelivery {
+  id            String                          @id @default(uuid()) @db.Uuid
+  referenceDate DateTime                        @map("reference_date") @db.Date
+  channel       AmortizationAlertChannel
+  status        AmortizationAlertDeliveryStatus @default(sent)
+  createdAt     DateTime                        @default(now()) @map("created_at") @db.Timestamptz
+
+  @@unique([referenceDate, channel])
+  @@map("amortization_alert_deliveries")
 }

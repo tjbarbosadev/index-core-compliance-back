@@ -156,6 +156,14 @@ const MENU_ITEMS = [
     perm: 'compliance.read',
   },
   {
+    key: 'menu-kyc',
+    label: 'Dossiês KYC',
+    route: '/kyc',
+    icon: 'file-search',
+    sortOrder: 85,
+    perm: 'compliance.read',
+  },
+  {
     key: 'menu-calendario',
     label: 'Calendário',
     route: '/calendario',

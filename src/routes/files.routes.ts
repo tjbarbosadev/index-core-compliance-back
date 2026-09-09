@@ -1,11 +1,13 @@
+import { createReadStream } from 'node:fs';
 import type { Express, Request, Response } from 'express';
 import express from 'express';
 import { prisma } from '../db/index.js';
 import { COOKIE_NAME, getUserFromSession, verifySessionCookie } from '../services/auth.service.js';
 import { hasPermissionInList, resolveUserPermissions } from '../services/permission.service.js';
 import { keyFromFileUri, saveFile } from '../lib/storage.js';
+import { getKycReportPdfPath } from '../services/kyc.service.js';
 
-async function requireDocumentsWrite(req: Request, res: Response) {
+async function requireSessionUser(req: Request, res: Response) {
   const cookie = req.cookies?.[COOKIE_NAME] as string | undefined;
   if (!cookie) {
     res.status(401).json({ error: 'Não autenticado' });
@@ -24,8 +26,28 @@ async function requireDocumentsWrite(req: Request, res: Response) {
     return null;
   }
 
+  return user;
+}
+
+async function requireDocumentsWrite(req: Request, res: Response) {
+  const user = await requireSessionUser(req, res);
+  if (!user) return null;
+
   const permissions = await resolveUserPermissions(user.id);
   if (!hasPermissionInList(permissions, 'documents.write', user.isAdmin)) {
+    res.status(403).json({ error: 'Permissão ausente' });
+    return null;
+  }
+
+  return user;
+}
+
+async function requireComplianceRead(req: Request, res: Response) {
+  const user = await requireSessionUser(req, res);
+  if (!user) return null;
+
+  const permissions = await resolveUserPermissions(user.id);
+  if (!hasPermissionInList(permissions, 'compliance.read', user.isAdmin)) {
     res.status(403).json({ error: 'Permissão ausente' });
     return null;
   }
@@ -82,4 +104,28 @@ export function registerFilesRoutes(app: Express) {
       }
     },
   );
+
+  app.get('/files/kyc-reports/:id', async (req, res) => {
+    if (!(await requireComplianceRead(req, res))) return;
+
+    const id = req.params.id;
+    if (!id) {
+      res.status(400).json({ error: 'Relatório inválido' });
+      return;
+    }
+
+    try {
+      const { absolutePath, fileName } = await getKycReportPdfPath(id);
+      res.setHeader('Content-Type', 'application/pdf');
+      res.setHeader('Content-Disposition', `attachment; filename="${fileName}"`);
+      createReadStream(absolutePath).pipe(res);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Falha ao baixar PDF';
+      if (message.includes('não encontrado')) {
+        res.status(404).json({ error: message });
+        return;
+      }
+      res.status(400).json({ error: message });
+    }
+  });
 }
