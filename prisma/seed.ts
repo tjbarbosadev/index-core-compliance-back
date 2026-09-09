@@ -148,6 +148,14 @@ const MENU_ITEMS = [
     perm: 'transactions.read',
   },
   {
+    key: 'menu-kyc',
+    label: 'Dossiês KYC',
+    route: '/kyc',
+    icon: 'file-search',
+    sortOrder: 75,
+    perm: 'compliance.read',
+  },
+  {
     key: 'menu-compliance',
     label: 'Compliance',
     route: '/compliance',
