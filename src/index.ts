@@ -24,6 +24,7 @@ app.use(
       }
       callback(null, false);
     },
+    allowedHeaders: ['Authorization', 'Content-Type'],
     credentials: true,
   }),
 );

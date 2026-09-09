@@ -72,4 +72,20 @@ export const env = {
   emailFrom: process.env.EMAIL_FROM ?? 'OpCore <acesso@opcore.com.br>',
   /** Em produção, força log do link de reset/convite quando o envio falha. */
   emailDebug: process.env.EMAIL_DEBUG === '1' || process.env.EMAIL_DEBUG === 'true',
+  /** Alerta amortização Sênior I (admin) — off por padrão; CI sem secrets. */
+  amortizationAlertEnabled:
+    process.env.AMORTIZATION_ALERT_ENABLED === '1' ||
+    process.env.AMORTIZATION_ALERT_ENABLED === 'true',
+  telegramBotToken: process.env.TELEGRAM_BOT_TOKEN?.trim() || undefined,
+  amortizationAlertTelegramChatId:
+    process.env.AMORTIZATION_ALERT_TELEGRAM_CHAT_ID?.trim() || undefined,
+  amortizationAlertEmail: process.env.AMORTIZATION_ALERT_EMAIL?.trim() || undefined,
+  amortizationAlertWhatsappTo: process.env.AMORTIZATION_ALERT_WHATSAPP_TO?.trim() || undefined,
+  /** Hub opcore-compliance — key vazia: API sobe; kyc.generate falha com mensagem clara. */
+  complianceApiUrl: (
+    process.env.COMPLIANCE_API_URL ?? 'https://api.compliance.opcore.com.br'
+  ).replace(/\/$/, ''),
+  complianceApiServiceKey: process.env.COMPLIANCE_API_SERVICE_KEY?.trim() || '',
+  complianceApiSub: process.env.COMPLIANCE_API_SUB?.trim() || 'admin',
+  complianceApiService: process.env.COMPLIANCE_API_SERVICE?.trim() || 'admin',
 };

@@ -4,10 +4,13 @@ import {
   calculateCompoundAmount,
   generateDailyYields,
   getVisualizationDate,
+  isSeniorIAmortizationDay,
   mapDataJsonQuota,
   parseYYYYMMDD,
   toSelicFactor,
   toYYYYMMDD,
+  tomorrowYYYYMMDD,
+  addDays,
   SELIC_SPREAD_PP,
 } from './quota-calculator.js';
 import { resolveSelicForDate, type SelicEntry } from './selic.service.js';
@@ -79,6 +82,88 @@ describe('quota-calculator (IndexCore parity)', () => {
     // 2026-07-22 15:00 UTC = 12:00 BRT Wednesday → D−1 Tuesday
     const wedBr = getVisualizationDate(new Date('2026-07-22T15:00:00Z'));
     expect(toYYYYMMDD(wedBr)).toBe('2026-07-21');
+  });
+
+  it('R11: tomorrowYYYYMMDD uses America/Sao_Paulo calendar not UTC midnight', () => {
+    // 2026-07-22 02:00 UTC = 2026-07-21 23:00 BRT → amanhã BRT = 2026-07-22
+    expect(tomorrowYYYYMMDD(new Date('2026-07-22T02:00:00Z'))).toBe('2026-07-22');
+    // 2026-07-22 15:00 UTC = 12:00 BRT Wednesday → amanhã = 2026-07-23
+    expect(tomorrowYYYYMMDD(new Date('2026-07-22T15:00:00Z'))).toBe('2026-07-23');
+  });
+});
+
+describe('isSeniorIAmortizationDay', () => {
+  const start = '2026-01-01';
+
+  function datePlus(days: number): string {
+    return toYYYYMMDD(addDays(parseYYYYMMDD(start), days));
+  }
+
+  it('R01: day 0 (contract start) is not amortization day', () => {
+    expect(isSeniorIAmortizationDay(start, start)).toBe(false);
+  });
+
+  it('R02: day 29 is not amortization day', () => {
+    expect(isSeniorIAmortizationDay(start, datePlus(29))).toBe(false);
+    expect(datePlus(29)).toBe('2026-01-30');
+  });
+
+  it('R03: day 30 is amortization day', () => {
+    expect(isSeniorIAmortizationDay(start, datePlus(30))).toBe(true);
+    expect(datePlus(30)).toBe('2026-01-31');
+  });
+
+  it('R04: day 31 is not amortization day', () => {
+    expect(isSeniorIAmortizationDay(start, datePlus(31))).toBe(false);
+    expect(datePlus(31)).toBe('2026-02-01');
+  });
+
+  it('R05: day 60 is amortization day', () => {
+    expect(isSeniorIAmortizationDay(start, datePlus(60))).toBe(true);
+  });
+
+  it('R06: day 90 is amortization day', () => {
+    expect(isSeniorIAmortizationDay(start, datePlus(90))).toBe(true);
+  });
+
+  it('R07: day math is quota-agnostic (alert filters senior_ii separately)', () => {
+    // Função só calcula ciclos de 30 dias; o job de alerta não a aplica a senior_ii.
+    expect(isSeniorIAmortizationDay(start, datePlus(30))).toBe(true);
+  });
+
+  it('R08: null, undefined or empty contract start is not eligible', () => {
+    expect(isSeniorIAmortizationDay(null, datePlus(30))).toBe(false);
+    expect(isSeniorIAmortizationDay(undefined, datePlus(30))).toBe(false);
+    expect(isSeniorIAmortizationDay('', datePlus(30))).toBe(false);
+  });
+
+  it('R09: date before contract start is not amortization day', () => {
+    expect(isSeniorIAmortizationDay(start, '2025-12-31')).toBe(false);
+  });
+
+  it('R10: generateDailyYields hadWithdraw matches isSeniorIAmortizationDay', () => {
+    const selic = { selicAnual: 15, selicFactor: 1.149 };
+    const days = generateDailyYields({
+      quotaType: 'senior_i',
+      investment: 10000,
+      initialDate: start,
+      endDate: datePlus(60),
+      getSelicForDate: () => selic,
+    });
+    for (const day of days) {
+      expect(day.hadWithdraw).toBe(isSeniorIAmortizationDay(start, day.referenceDate));
+    }
+  });
+
+  it('R12: cycle across year boundary', () => {
+    expect(isSeniorIAmortizationDay('2025-12-02', '2026-01-01')).toBe(true);
+  });
+
+  it('R13: cycles 30/60/120 true; 45 false', () => {
+    expect(isSeniorIAmortizationDay(start, datePlus(30))).toBe(true);
+    expect(isSeniorIAmortizationDay(start, datePlus(60))).toBe(true);
+    expect(isSeniorIAmortizationDay(start, datePlus(120))).toBe(true);
+    expect(isSeniorIAmortizationDay(start, datePlus(45))).toBe(false);
   });
 });
 

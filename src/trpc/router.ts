@@ -8,6 +8,8 @@ import { onboardingRouter, cedenteOnboardingRouter } from '../routers/onboarding
 import { cotistasRouter } from '../routers/cotistas.router.js';
 import { auditRouter } from '../routers/audit.router.js';
 import { dashboardRouter } from '../routers/dashboard.router.js';
+import { kycRouter } from '../routers/kyc.router.js';
+import { complianceRouter } from '../routers/compliance.router.js';
 
 export const appRouter = router({
   health: healthRouter,
@@ -21,6 +23,8 @@ export const appRouter = router({
   cotistas: cotistasRouter,
   audit: auditRouter,
   dashboard: dashboardRouter,
+  kyc: kycRouter,
+  compliance: complianceRouter,
 });
 
 export type AppRouter = typeof appRouter;

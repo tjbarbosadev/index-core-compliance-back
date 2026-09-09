@@ -50,8 +50,22 @@ export function diffDays(initial: string, dateStr: string): number {
   return Math.floor((b - a) / (1000 * 60 * 60 * 24));
 }
 
+/**
+ * Dia de amortização Sênior I: a cada `liquidityDays` (30) corridos desde o início do contrato.
+ * `dias === 0` (início) não amortiza. Filtro por `quotaType` fica no job de alerta.
+ */
+export function isSeniorIAmortizationDay(
+  contractStart: string | null | undefined,
+  date: string,
+): boolean {
+  if (!contractStart) return false;
+  const dias = diffDays(contractStart, date);
+  if (dias <= 0) return false;
+  return dias % QUOTA_CONFIG.senior_i.liquidityDays === 0;
+}
+
 /** Calendário civil em America/Sao_Paulo (YYYY-MM-DD às 12:00 UTC). */
-function calendarDateInSaoPaulo(today = new Date()): Date {
+export function getCalendarDateInSaoPaulo(today = new Date()): Date {
   const parts = new Intl.DateTimeFormat('en-CA', {
     timeZone: 'America/Sao_Paulo',
     year: 'numeric',
@@ -64,9 +78,14 @@ function calendarDateInSaoPaulo(today = new Date()): Date {
   return new Date(Date.UTC(y, m - 1, d, 12));
 }
 
+/** Amanhã no calendário civil BRT (YYYY-MM-DD). */
+export function tomorrowYYYYMMDD(now = new Date()): string {
+  return toYYYYMMDD(addDays(getCalendarDateInSaoPaulo(now), 1));
+}
+
 /** Data de visualização (IndexCore): calendário BR; seg→sex; sáb/dom→sex; ter–sex→D−1. */
 export function getVisualizationDate(today = new Date()): Date {
-  const d = calendarDateInSaoPaulo(today);
+  const d = getCalendarDateInSaoPaulo(today);
   // ISO: Mon=1 … Sun=7
   const weekDay = ((d.getUTCDay() + 6) % 7) + 1;
   if (weekDay === 1) return addDays(d, -3);
@@ -153,7 +172,7 @@ export function generateDailyYields(params: {
       rendimentoDia = saldoTotal - saldoAnterior;
     } else {
       const liquidityDays = QUOTA_CONFIG.senior_i.liquidityDays;
-      const isDiaDeSaque = dias > 0 && dias % liquidityDays === 0;
+      const isDiaDeSaque = isSeniorIAmortizationDay(initialDate, dateStr);
 
       if (isDiaDeSaque) {
         const inicioCiclo = addDays(start, dias - liquidityDays);
