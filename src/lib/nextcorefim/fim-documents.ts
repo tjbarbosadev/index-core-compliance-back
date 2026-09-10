@@ -130,3 +130,18 @@ export async function deleteFimDocumentForCotista(
     mapFimError(err);
   }
 }
+
+export async function downloadFimDocumentForCotista(
+  cotistaId: string,
+  documentId: string,
+  disposition: 'inline' | 'attachment',
+): Promise<Response> {
+  const cotista = await loadCotistaParty(cotistaId);
+  const applicationId = await ensureFimApplicationForParty(cotista.partyId);
+
+  try {
+    return await nextcorefimClient.downloadDocument(applicationId, documentId, disposition);
+  } catch (err) {
+    mapFimError(err);
+  }
+}

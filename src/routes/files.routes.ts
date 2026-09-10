@@ -66,6 +66,22 @@ async function requireComplianceRead(req: Request, res: Response) {
   return user;
 }
 
+async function requireFimDocumentsView(req: Request, res: Response) {
+  const user = await requireSessionUser(req, res);
+  if (!user) return null;
+
+  const permissions = await resolveUserPermissions(user.id);
+  const allowed =
+    hasPermissionInList(permissions, 'cotistas.view_kyc', user.isAdmin) ||
+    hasPermissionInList(permissions, 'documents.view_kyc', user.isAdmin);
+  if (!allowed) {
+    res.status(403).json({ error: 'Permissão ausente' });
+    return null;
+  }
+
+  return user;
+}
+
 export function registerFilesRoutes(app: Express) {
   app.put(
     '/files/upload/:documentId',
@@ -177,6 +193,41 @@ export function registerFilesRoutes(app: Express) {
       }
     },
   );
+
+  app.get('/files/fim/:cotistaId/documents/:documentId', async (req, res) => {
+    if (!(await requireFimDocumentsView(req, res))) return;
+
+    const { cotistaId, documentId } = req.params;
+    if (!cotistaId || !documentId) {
+      res.status(400).json({ error: 'Parâmetros inválidos' });
+      return;
+    }
+
+    const disposition = req.query.disposition === 'attachment' ? 'attachment' : 'inline';
+
+    try {
+      const { downloadFimDocumentForCotista } = await import('../lib/nextcorefim/fim-documents.js');
+      const upstream = await downloadFimDocumentForCotista(cotistaId, documentId, disposition);
+
+      const contentType = upstream.headers.get('content-type');
+      const contentDisposition = upstream.headers.get('content-disposition');
+      const contentLength = upstream.headers.get('content-length');
+      if (contentType) res.setHeader('Content-Type', contentType);
+      if (contentDisposition) res.setHeader('Content-Disposition', contentDisposition);
+      if (contentLength) res.setHeader('Content-Length', contentLength);
+
+      if (!upstream.body) {
+        const buffer = Buffer.from(await upstream.arrayBuffer());
+        res.send(buffer);
+        return;
+      }
+
+      const { Readable } = await import('node:stream');
+      Readable.fromWeb(upstream.body as import('node:stream/web').ReadableStream).pipe(res);
+    } catch (err) {
+      sendAppError(res, err, 'Falha ao baixar documento');
+    }
+  });
 
   app.delete('/files/fim/:cotistaId/documents/:documentId', async (req, res) => {
     if (!(await requireDocumentsWrite(req, res))) return;

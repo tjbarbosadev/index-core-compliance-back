@@ -171,6 +171,35 @@ export class NextcorefimApiClient {
 
     return payload as FimDocumentsChecklist;
   }
+
+  /**
+   * Fetches document bytes from nextcorefim (Mega). Caller streams the Response body.
+   */
+  async downloadDocument(
+    applicationId: string,
+    documentId: string,
+    disposition: 'inline' | 'attachment' = 'inline',
+  ): Promise<Response> {
+    const qs = new URLSearchParams({ disposition });
+    const response = await this.fetchFn(
+      `${this.baseUrl()}/internal/applications/${encodeURIComponent(applicationId)}/documents/${encodeURIComponent(documentId)}?${qs}`,
+      {
+        method: 'GET',
+        headers: this.headers(),
+      },
+    );
+
+    if (!response.ok) {
+      const payload = await response.json().catch(() => null);
+      throw new NextcorefimApiError(
+        parseErrorMessage(payload, 'Falha ao baixar documento do Mega'),
+        response.status,
+        payload,
+      );
+    }
+
+    return response;
+  }
 }
 
 export const nextcorefimClient = new NextcorefimApiClient();
