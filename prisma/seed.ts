@@ -367,7 +367,8 @@ async function main() {
   for (const u of SEED_USERS) {
     const user = await prisma.user.upsert({
       where: { email: u.email },
-      update: { name: u.name, isAdmin: u.isAdmin, passwordHash: seedPasswordHash },
+      // Do not reset passwordHash on update — prod seed must not wipe real credentials
+      update: { name: u.name, isAdmin: u.isAdmin },
       create: {
         email: u.email,
         name: u.name,

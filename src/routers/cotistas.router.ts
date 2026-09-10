@@ -104,4 +104,11 @@ export const cotistasRouter = router({
     .mutation(({ input, ctx }) =>
       cotistaService.rejectCotista(input.id, input.reason, ctx.user.id, ctx.ip),
     ),
+
+  getFimDocuments: permissionProcedure('cotistas.view_kyc')
+    .input(z.object({ id: z.string().uuid() }))
+    .query(async ({ input, ctx }) => {
+      const { getFimDocumentsForCotista } = await import('../lib/nextcorefim/fim-documents.js');
+      return getFimDocumentsForCotista(input.id, ctx.permissions, ctx.user.isAdmin);
+    }),
 });

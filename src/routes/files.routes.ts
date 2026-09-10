@@ -1,11 +1,22 @@
 import { createReadStream } from 'node:fs';
 import type { Express, Request, Response } from 'express';
 import express from 'express';
+import { TRPCError } from '@trpc/server';
+import { getHTTPStatusCodeFromError } from '@trpc/server/http';
 import { prisma } from '../db/index.js';
 import { COOKIE_NAME, getUserFromSession, verifySessionCookie } from '../services/auth.service.js';
 import { hasPermissionInList, resolveUserPermissions } from '../services/permission.service.js';
 import { keyFromFileUri, saveFile } from '../lib/storage.js';
 import { getKycReportPdfPath } from '../services/kyc.service.js';
+
+function sendAppError(res: Response, err: unknown, fallback: string) {
+  if (err instanceof TRPCError) {
+    res.status(getHTTPStatusCodeFromError(err)).json({ error: err.message });
+    return;
+  }
+  const message = err instanceof Error ? err.message : fallback;
+  res.status(400).json({ error: message });
+}
 
 async function requireSessionUser(req: Request, res: Response) {
   const cookie = req.cookies?.[COOKIE_NAME] as string | undefined;
@@ -126,6 +137,62 @@ export function registerFilesRoutes(app: Express) {
         return;
       }
       res.status(400).json({ error: message });
+    }
+  });
+
+  /** Proxy multipart upload to nextcorefim Mega (shared with public FIM onboarding). */
+  app.post(
+    '/files/fim/:cotistaId/documents',
+    express.raw({
+      type: (req) => Boolean(req.headers['content-type']?.includes('multipart/form-data')),
+      limit: '12mb',
+    }),
+    async (req, res) => {
+      if (!(await requireDocumentsWrite(req, res))) return;
+
+      const cotistaId = req.params.cotistaId;
+      if (!cotistaId) {
+        res.status(400).json({ error: 'Cotista inválido' });
+        return;
+      }
+
+      const contentType = req.headers['content-type'];
+      if (!contentType?.includes('multipart/form-data')) {
+        res.status(400).json({ error: 'Content-Type multipart/form-data obrigatório' });
+        return;
+      }
+
+      const body = req.body;
+      if (!Buffer.isBuffer(body) || body.length === 0) {
+        res.status(400).json({ error: 'Arquivo vazio' });
+        return;
+      }
+
+      try {
+        const { uploadFimDocumentForCotista } = await import('../lib/nextcorefim/fim-documents.js');
+        const checklist = await uploadFimDocumentForCotista(cotistaId, contentType, body);
+        res.status(201).json(checklist);
+      } catch (err) {
+        sendAppError(res, err, 'Falha ao enviar documento');
+      }
+    },
+  );
+
+  app.delete('/files/fim/:cotistaId/documents/:documentId', async (req, res) => {
+    if (!(await requireDocumentsWrite(req, res))) return;
+
+    const { cotistaId, documentId } = req.params;
+    if (!cotistaId || !documentId) {
+      res.status(400).json({ error: 'Parâmetros inválidos' });
+      return;
+    }
+
+    try {
+      const { deleteFimDocumentForCotista } = await import('../lib/nextcorefim/fim-documents.js');
+      const checklist = await deleteFimDocumentForCotista(cotistaId, documentId);
+      res.json(checklist);
+    } catch (err) {
+      sendAppError(res, err, 'Falha ao remover documento');
     }
   });
 }

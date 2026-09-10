@@ -356,6 +356,18 @@ export async function approveOnboarding(
   });
 
   if (kind === 'cotista' && result.cotistaId) {
+    // Link FIM application (Mega) without copying files into local Document rows.
+    try {
+      const { ensureFimApplicationForParty } = await import('../lib/nextcorefim/fim-documents.js');
+      const cotistaRow = await prisma.cotista.findUnique({
+        where: { id: result.cotistaId },
+        select: { partyId: true },
+      });
+      if (cotistaRow) await ensureFimApplicationForParty(cotistaRow.partyId);
+    } catch (err) {
+      console.warn('[onboarding.approve] ensure FIM application failed (non-fatal):', err);
+    }
+
     const cotista = await mapCotistaFull(result.cotistaId);
     return { cotista };
   }

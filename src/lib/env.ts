@@ -88,4 +88,10 @@ export const env = {
   complianceApiServiceKey: process.env.COMPLIANCE_API_SERVICE_KEY?.trim() || '',
   complianceApiSub: process.env.COMPLIANCE_API_SUB?.trim() || 'admin',
   complianceApiService: process.env.COMPLIANCE_API_SERVICE?.trim() || 'admin',
+  /** nextcorefim — documentos Mega do FIM; key vazia: rotas FIM falham com mensagem clara. */
+  nextcorefimApiUrl: (process.env.NEXTCOREFIM_API_URL ?? 'http://localhost:3001').replace(
+    /\/$/,
+    '',
+  ),
+  nextcorefimApiServiceKey: process.env.NEXTCOREFIM_API_SERVICE_KEY?.trim() || '',
 };

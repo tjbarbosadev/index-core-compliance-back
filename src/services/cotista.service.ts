@@ -160,6 +160,8 @@ export async function mapCotistaFull(cotistaId: string) {
 
   return {
     id: cotista.id,
+    partyId: cotista.partyId,
+    fimApplicationId: cotista.party.fimApplicationId ?? null,
     legalName: cotista.party.legalName,
     cpfCnpj: cotista.party.cpfCnpj,
     status: cotista.party.status,
@@ -414,6 +416,14 @@ export async function approveCotista(id: string, expiresAt: string, userId: stri
       approvedBy: userId,
     },
   });
+
+  // Link FIM application (Mega) without copying files into local Document rows.
+  try {
+    const { ensureFimApplicationForParty } = await import('../lib/nextcorefim/fim-documents.js');
+    await ensureFimApplicationForParty(cotista.partyId);
+  } catch (err) {
+    console.warn('[cotista.approve] ensure FIM application failed (non-fatal):', err);
+  }
 
   await logAudit({
     userId,
