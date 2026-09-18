@@ -33,10 +33,38 @@ export const onboardingRouter = router({
     ),
 
   approve: permissionProcedure('onboarding.approve')
-    .input(z.object({ id: z.string().uuid() }))
+    .input(z.object({ id: z.string().uuid(), justification: z.string().min(1) }))
     .mutation(({ input, ctx }) =>
-      onboardingService.approveOnboarding(input.id, 'cotista', ctx.user.id, ctx.ip),
+      onboardingService.approveOnboarding(
+        input.id,
+        'cotista',
+        ctx.user.id,
+        ctx.ip,
+        input.justification,
+      ),
     ),
+
+  confirmDeposit: permissionProcedure('transactions.approve')
+    .input(
+      z.object({
+        onboardingId: z.string().uuid(),
+        amount: z.number().positive(),
+        proofUri: z.string().optional(),
+        quotaType: z
+          .enum(['senior', 'senior_i', 'senior_ii', 'mezanino', 'subordinada', 'unica'])
+          .optional(),
+        quotaCount: z.number().int().nonnegative().optional(),
+        bankAccount: z
+          .object({
+            bankCode: z.string().min(1),
+            branch: z.string().min(1),
+            account: z.string().min(1),
+            accountType: z.string().optional(),
+          })
+          .optional(),
+      }),
+    )
+    .mutation(({ input, ctx }) => onboardingService.confirmDeposit(input, ctx.user.id, ctx.ip)),
 
   reject: permissionProcedure('onboarding.approve')
     .input(z.object({ id: z.string().uuid(), reason: z.string().min(1) }))
@@ -80,9 +108,15 @@ export const cedenteOnboardingRouter = router({
     ),
 
   approve: permissionProcedure('cedentes.approve')
-    .input(z.object({ id: z.string().uuid() }))
+    .input(z.object({ id: z.string().uuid(), justification: z.string().min(1) }))
     .mutation(({ input, ctx }) =>
-      onboardingService.approveOnboarding(input.id, 'cedente', ctx.user.id, ctx.ip),
+      onboardingService.approveOnboarding(
+        input.id,
+        'cedente',
+        ctx.user.id,
+        ctx.ip,
+        input.justification,
+      ),
     ),
 
   reject: permissionProcedure('cedentes.approve')

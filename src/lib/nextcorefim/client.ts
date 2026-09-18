@@ -81,8 +81,19 @@ export class NextcorefimApiClient {
     };
   }
 
+  private async safeFetch(input: string, init?: RequestInit): Promise<Response> {
+    try {
+      return await this.fetchFn(input, init);
+    } catch {
+      throw new NextcorefimApiError(
+        'Serviço FIM indisponível (nextcorefim). Verifique se a API está rodando na porta configurada e tente novamente.',
+        503,
+      );
+    }
+  }
+
   async ensureApplication(input: EnsureApplicationInput): Promise<EnsureApplicationResult> {
-    const response = await this.fetchFn(`${this.baseUrl()}/internal/applications/ensure`, {
+    const response = await this.safeFetch(`${this.baseUrl()}/internal/applications/ensure`, {
       method: 'POST',
       headers: this.headers({ 'Content-Type': 'application/json' }),
       body: JSON.stringify(input),
@@ -101,7 +112,7 @@ export class NextcorefimApiClient {
   }
 
   async listDocuments(applicationId: string): Promise<FimDocumentsChecklist> {
-    const response = await this.fetchFn(
+    const response = await this.safeFetch(
       `${this.baseUrl()}/internal/applications/${encodeURIComponent(applicationId)}/documents`,
       {
         method: 'GET',
@@ -130,7 +141,7 @@ export class NextcorefimApiClient {
     contentType: string,
     body: Buffer,
   ): Promise<FimDocumentsChecklist> {
-    const response = await this.fetchFn(
+    const response = await this.safeFetch(
       `${this.baseUrl()}/internal/applications/${encodeURIComponent(applicationId)}/documents`,
       {
         method: 'POST',
@@ -152,7 +163,7 @@ export class NextcorefimApiClient {
   }
 
   async deleteDocument(applicationId: string, documentId: string): Promise<FimDocumentsChecklist> {
-    const response = await this.fetchFn(
+    const response = await this.safeFetch(
       `${this.baseUrl()}/internal/applications/${encodeURIComponent(applicationId)}/documents/${encodeURIComponent(documentId)}`,
       {
         method: 'DELETE',
@@ -181,7 +192,7 @@ export class NextcorefimApiClient {
     disposition: 'inline' | 'attachment' = 'inline',
   ): Promise<Response> {
     const qs = new URLSearchParams({ disposition });
-    const response = await this.fetchFn(
+    const response = await this.safeFetch(
       `${this.baseUrl()}/internal/applications/${encodeURIComponent(applicationId)}/documents/${encodeURIComponent(documentId)}?${qs}`,
       {
         method: 'GET',

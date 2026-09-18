@@ -444,6 +444,7 @@ model Cedente {
   createdAt             DateTime  @default(now()) @map("created_at") @db.Timestamptz
 
   party Party @relation(fields: [partyId], references: [id], onDelete: Cascade)
+  investments FundInvestment[]
 
   @@map("cedentes")
 }
@@ -475,8 +476,28 @@ model Fund {
   netWorthHistory     FundNetWorthHistory[]
   partyFundLinks      PartyFundLink[]
   onboardingProcesses OnboardingProcess[]
+  bankAccount         FundBankAccount?
+  investments         FundInvestment[]
+  transactions        FundTransaction[]
 
   @@map("funds")
+}
+
+model FundBankAccount {
+  id          String   @id @default(uuid()) @db.Uuid
+  fundId      String   @unique @map("fund_id") @db.Uuid
+  bankCode    String   @map("bank_code") @db.VarChar(10)
+  bankName    String?  @map("bank_name") @db.VarChar(100)
+  branch      String   @db.VarChar(10)
+  account     String   @db.VarChar(20)
+  accountType String   @default("corrente") @map("account_type") @db.VarChar(20)
+  pixKey      String?  @map("pix_key") @db.VarChar(255)
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt   DateTime @updatedAt @map("updated_at") @db.Timestamptz
+
+  fund Fund @relation(fields: [fundId], references: [id], onDelete: Cascade)
+
+  @@map("fund_bank_accounts")
 }
 
 model FundNetWorthHistory {
@@ -633,6 +654,8 @@ model OnboardingProcess {
   currentStep Int              @default(1) @map("current_step") @db.SmallInt
   status      OnboardingStatus @default(em_andamento)
   stepDataJson Json?           @default("{}") @map("step_data_json")
+  approvalJustification String? @map("approval_justification") @db.Text
+  approvedById String?         @map("approved_by_id") @db.Uuid
   startedAt   DateTime         @default(now()) @map("started_at") @db.Timestamptz
   expiresAt   DateTime?        @map("expires_at") @db.Timestamptz
   completedAt DateTime?        @map("completed_at") @db.Timestamptz
@@ -801,4 +824,91 @@ model AmortizationAlertDelivery {
 
   @@unique([referenceDate, channel])
   @@map("amortization_alert_deliveries")
+}
+
+// ============================================================================
+// INVESTIDOS (fund portfolio assets)
+// ============================================================================
+
+enum InvestmentStatus {
+  pendente
+  aprovado
+  cancelado
+
+  @@map("investment_status")
+}
+
+enum TransactionType {
+  aporte
+  resgate
+  amortizacao
+  rendimento
+  compra_ativo
+  venda_ativo
+
+  @@map("transaction_type")
+}
+
+enum TransactionCounterparty {
+  cotista
+  cedente
+  fundo
+  outro
+
+  @@map("transaction_counterparty")
+}
+
+enum TransactionStatus {
+  pendente
+  aprovado
+  estornado
+
+  @@map("transaction_status")
+}
+
+model FundInvestment {
+  id                     String           @id @default(uuid()) @db.Uuid
+  fundId                 String           @map("fund_id") @db.Uuid
+  assetClass             AssetClass       @map("asset_class")
+  title                  String           @db.VarChar(500)
+  amount                 Decimal          @db.Decimal(18, 2)
+  justification          String           @db.Text
+  cedenteId              String?          @map("cedente_id") @db.Uuid
+  acquisitionDocumentUri String?          @map("acquisition_document_uri")
+  paymentProofUri        String?          @map("payment_proof_uri")
+  status                 InvestmentStatus @default(aprovado)
+  acquiredAt             DateTime         @map("acquired_at") @db.Date
+  createdById            String?          @map("created_by") @db.Uuid
+  createdAt              DateTime         @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt              DateTime         @updatedAt @map("updated_at") @db.Timestamptz
+
+  fund    Fund     @relation(fields: [fundId], references: [id], onDelete: Cascade)
+  cedente Cedente? @relation(fields: [cedenteId], references: [id], onDelete: SetNull)
+
+  @@index([fundId, assetClass])
+  @@index([cedenteId])
+  @@map("fund_investments")
+}
+
+model FundTransaction {
+  id                String                  @id @default(uuid()) @db.Uuid
+  fundId            String                  @map("fund_id") @db.Uuid
+  type              TransactionType
+  counterpartyKind  TransactionCounterparty @map("counterparty_kind")
+  partyId           String?                 @map("party_id") @db.Uuid
+  amount            Decimal                 @db.Decimal(18, 2)
+  signedAmount      Decimal                 @map("signed_amount") @db.Decimal(18, 2)
+  description       String?                 @db.VarChar(500)
+  proofUri          String?                 @map("proof_uri")
+  status            TransactionStatus       @default(aprovado)
+  occurredAt        DateTime                @map("occurred_at") @db.Timestamptz
+  createdById       String?                 @map("created_by") @db.Uuid
+  createdAt         DateTime                @default(now()) @map("created_at") @db.Timestamptz
+
+  fund Fund @relation(fields: [fundId], references: [id], onDelete: Cascade)
+
+  @@index([fundId, occurredAt])
+  @@index([partyId])
+  @@index([type, status])
+  @@map("fund_transactions")
 }

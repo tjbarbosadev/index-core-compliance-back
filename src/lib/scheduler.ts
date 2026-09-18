@@ -22,6 +22,11 @@ export async function runDailyJobs(): Promise<void> {
   } catch (err) {
     console.error('[job] falha no alerta de amortização (dry-run)', err);
   }
+  try {
+    await runKycRenewalJob();
+  } catch (err) {
+    console.error('[job] falha na renovação KYC 6 meses', err);
+  }
   console.log(`[job] daily 06:00 ${CRON_TZ} finished`);
 }
 
@@ -86,6 +91,81 @@ async function cadastroExpirationAlert() {
   if (soon > 0) {
     console.log(`[job] ${soon} cadastros expiram em até 30 dias`);
   }
+}
+
+const KYC_RENEWAL_MONTHS = 6;
+
+/** Partes aprovadas com KYC ausente ou com mais de 6 meses — renovação ou alerta. */
+export async function runKycRenewalJob(): Promise<void> {
+  const cutoff = new Date();
+  cutoff.setMonth(cutoff.getMonth() - KYC_RENEWAL_MONTHS);
+
+  const parties = await prisma.party.findMany({
+    where: { status: 'aprovado' },
+    select: {
+      id: true,
+      cpfCnpj: true,
+      legalName: true,
+      kycReports: { orderBy: { createdAt: 'desc' }, take: 1, select: { createdAt: true } },
+    },
+  });
+
+  const stale = parties.filter((p) => {
+    const latest = p.kycReports[0];
+    return !latest || latest.createdAt < cutoff;
+  });
+
+  if (stale.length === 0) return;
+
+  const systemUser =
+    (await prisma.user.findFirst({ where: { isAdmin: true }, orderBy: { createdAt: 'asc' } })) ??
+    (await prisma.user.findFirst({ orderBy: { createdAt: 'asc' } }));
+
+  for (const party of stale) {
+    try {
+      const digits = party.cpfCnpj.replace(/\D/g, '');
+      const documentType = digits.length <= 11 ? 'CPF' : 'CNPJ';
+
+      if (systemUser) {
+        const { generateKycReport } = await import('../services/kyc.service.js');
+        await generateKycReport(
+          { document: digits, documentType, partyId: party.id, forceRefresh: true },
+          systemUser.id,
+        );
+        console.log(`[job] KYC renovado party=${party.id}`);
+        continue;
+      }
+    } catch (err) {
+      console.warn(`[job] KYC generate falhou party=${party.id}`, err);
+    }
+
+    try {
+      const existing = await prisma.complianceAlert.findFirst({
+        where: {
+          entityType: 'party',
+          entityId: party.id,
+          type: { in: ['lista_restritiva', 'outro'] },
+          status: { in: ['novo', 'investigando'] },
+          description: { contains: 'renovação KYC' },
+        },
+      });
+      if (!existing) {
+        await prisma.complianceAlert.create({
+          data: {
+            type: 'outro',
+            severity: 'media',
+            entityType: 'party',
+            entityId: party.id,
+            description: `Renovação KYC pendente (> ${KYC_RENEWAL_MONTHS} meses) — ${party.legalName}`,
+          },
+        });
+      }
+    } catch (alertErr) {
+      console.warn(`[job] alerta KYC falhou party=${party.id}`, alertErr);
+    }
+  }
+
+  console.log(`[job] KYC renewal processados: ${stale.length}`);
 }
 
 export { checkOnboardingExpiration, checkCadastroExpiration, cadastroExpirationAlert, CRON_TZ };

@@ -93,4 +93,21 @@ export const fundsRouter = router({
       const { id, ...data } = input;
       return fundService.updateFund(id, data, ctx.user.id, ctx.ip);
     }),
+
+  upsertBankAccount: permissionProcedure('fundos.write')
+    .input(
+      z.object({
+        fundId: z.string().uuid(),
+        bankCode: z.string().min(1),
+        bankName: z.string().optional(),
+        branch: z.string().min(1),
+        account: z.string().min(1),
+        accountType: z.string().optional(),
+        pixKey: z.string().optional(),
+      }),
+    )
+    .mutation(({ input, ctx }) => {
+      const { fundId, ...data } = input;
+      return fundService.upsertFundBankAccount(fundId, data, ctx.user.id, ctx.ip);
+    }),
 });

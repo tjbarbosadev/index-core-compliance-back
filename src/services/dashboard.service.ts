@@ -1,5 +1,6 @@
 import { prisma } from '../db/index.js';
 import { searchAudit } from './audit.service.js';
+import { sumGlobalNetWorthFromLinks } from './fund-pl.service.js';
 
 export type DashboardSummary = {
   totalNetWorth: number;
@@ -42,17 +43,9 @@ export function mapActivity(log: Awaited<ReturnType<typeof searchAudit>>[number]
 }
 
 export async function getSummary(): Promise<DashboardSummary> {
-  const [fundsWithPl, activeFunds, approvedShareholders, onboardingsInProgress, activeAlerts] =
+  const [totalNetWorth, activeFunds, approvedShareholders, onboardingsInProgress, activeAlerts] =
     await Promise.all([
-      prisma.fund.findMany({
-        select: {
-          netWorthHistory: {
-            orderBy: { referenceDate: 'desc' },
-            take: 1,
-            select: { netWorth: true },
-          },
-        },
-      }),
+      sumGlobalNetWorthFromLinks(),
       prisma.fund.count({ where: { status: 'ativo' } }),
       prisma.cotista.count({ where: { party: { status: 'aprovado' } } }),
       prisma.onboardingProcess.count({ where: { status: 'em_andamento' } }),
@@ -60,11 +53,6 @@ export async function getSummary(): Promise<DashboardSummary> {
         where: { status: { in: ['novo', 'investigando', 'reportado_coaf'] } },
       }),
     ]);
-
-  const totalNetWorth = fundsWithPl.reduce(
-    (sum, fund) => sum + Number(fund.netWorthHistory[0]?.netWorth ?? 0),
-    0,
-  );
 
   return {
     totalNetWorth,

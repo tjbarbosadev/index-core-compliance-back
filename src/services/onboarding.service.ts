@@ -242,6 +242,33 @@ export async function advanceOnboardingStep(
     }
   }
 
+  const owners = stepData.beneficialOwners;
+  if (Array.isArray(owners) && kind === 'cedente') {
+    await prisma.partyBeneficialOwner.deleteMany({ where: { partyId: process.partyId } });
+    for (const raw of owners) {
+      const o = raw as {
+        ownerName?: string;
+        name?: string;
+        ownerCpfCnpj?: string;
+        cpfCnpj?: string;
+        ownershipPct?: number;
+        pepFlag?: boolean;
+      };
+      const ownerName = (o.ownerName ?? o.name ?? '').trim();
+      const ownerCpfCnpj = (o.ownerCpfCnpj ?? o.cpfCnpj ?? '').trim();
+      if (!ownerName || !ownerCpfCnpj) continue;
+      await prisma.partyBeneficialOwner.create({
+        data: {
+          partyId: process.partyId,
+          ownerName,
+          ownerCpfCnpj,
+          ownershipPct: Number(o.ownershipPct ?? 0),
+          pepFlag: Boolean(o.pepFlag),
+        },
+      });
+    }
+  }
+
   await prisma.onboardingProcess.update({
     where: { id },
     data: {
@@ -258,7 +285,12 @@ export async function approveOnboarding(
   kind: OnboardingKind,
   userId: string,
   ip?: string,
+  justification?: string,
 ) {
+  const trimmedJustification = justification?.trim() ?? '';
+  if (!trimmedJustification) {
+    throw APP_ERROR.BAD_REQUEST('Justificativa de aprovação é obrigatória');
+  }
   const process = await prisma.onboardingProcess.findFirst({
     where: { id, kind },
     include: { party: true, fund: true, suitabilityResponse: true },
@@ -279,7 +311,7 @@ export async function approveOnboarding(
   const expiresAt = new Date();
   expiresAt.setFullYear(expiresAt.getFullYear() + 1);
 
-  const result = await prisma.$transaction(async (tx) => {
+  await prisma.$transaction(async (tx) => {
     await tx.party.update({
       where: { id: process.partyId },
       data: {
@@ -292,45 +324,18 @@ export async function approveOnboarding(
     });
 
     if (kind === 'cotista') {
-      const cotista = await tx.cotista.upsert({
-        where: { partyId: process.partyId },
-        update: {
-          investorProfile: process.suitabilityResponse?.resultProfile,
-          suitabilityResult: process.suitabilityResponse?.resultProfile,
-        },
-        create: {
-          partyId: process.partyId,
-          investorProfile: process.suitabilityResponse?.resultProfile,
-          suitabilityResult: process.suitabilityResponse?.resultProfile,
-        },
-      });
-
-      // N party_fund_links allowed per party (no unique party+fund+quotaType).
-      // Onboarding creates one link if none exists yet for this fund+type.
-      const quotaType = process.quotaType ?? 'senior_i';
-      const existingLink = await tx.partyFundLink.findFirst({
-        where: {
-          partyId: process.partyId,
-          fundId: process.fundId,
-          quotaType,
-        },
-      });
-      if (!existingLink) {
-        await tx.partyFundLink.create({
-          data: {
-            partyId: process.partyId,
-            fundId: process.fundId,
-            quotaType,
-          },
-        });
-      }
-
       await tx.onboardingProcess.update({
         where: { id },
-        data: { status: 'aprovado', completedAt: new Date(), currentStep: 6 },
+        data: {
+          status: 'aprovado',
+          completedAt: new Date(),
+          currentStep: 6,
+          approvalJustification: trimmedJustification,
+          approvedById: userId,
+        },
       });
 
-      return { cotistaId: cotista.id };
+      return { cotistaId: null as string | null };
     }
 
     await tx.cedente.upsert({
@@ -341,7 +346,13 @@ export async function approveOnboarding(
 
     await tx.onboardingProcess.update({
       where: { id },
-      data: { status: 'aprovado', completedAt: new Date(), currentStep: 6 },
+      data: {
+        status: 'aprovado',
+        completedAt: new Date(),
+        currentStep: 6,
+        approvalJustification: trimmedJustification,
+        approvedById: userId,
+      },
     });
 
     return { cedentePartyId: process.partyId };
@@ -352,27 +363,146 @@ export async function approveOnboarding(
     action: kind === 'cotista' ? 'onboarding.approve' : 'cedentes.approve',
     entityType: 'onboarding_process',
     entityId: id,
+    details: { justification: trimmedJustification },
     ipAddress: ip,
   });
 
-  if (kind === 'cotista' && result.cotistaId) {
-    // Link FIM application (Mega) without copying files into local Document rows.
-    try {
-      const { ensureFimApplicationForParty } = await import('../lib/nextcorefim/fim-documents.js');
-      const cotistaRow = await prisma.cotista.findUnique({
-        where: { id: result.cotistaId },
-        select: { partyId: true },
-      });
-      if (cotistaRow) await ensureFimApplicationForParty(cotistaRow.partyId);
-    } catch (err) {
-      console.warn('[onboarding.approve] ensure FIM application failed (non-fatal):', err);
-    }
-
-    const cotista = await mapCotistaFull(result.cotistaId);
-    return { cotista };
+  if (kind === 'cotista') {
+    return loadProcess(id, kind);
   }
 
   return loadProcess(id, kind);
+}
+
+export type ConfirmDepositInput = {
+  onboardingId: string;
+  amount: number;
+  proofUri?: string;
+  quotaType?: QuotaType;
+  quotaCount?: number;
+  bankAccount?: {
+    bankCode: string;
+    branch: string;
+    account: string;
+    accountType?: string;
+  };
+};
+
+export async function confirmDeposit(input: ConfirmDepositInput, userId: string, ip?: string) {
+  if (!(input.amount > 0)) throw APP_ERROR.BAD_REQUEST('Valor do aporte deve ser positivo');
+
+  const process = await prisma.onboardingProcess.findFirst({
+    where: { id: input.onboardingId, kind: 'cotista' },
+    include: { party: true, suitabilityResponse: true },
+  });
+  if (!process) throw APP_ERROR.NOT_FOUND('Onboarding');
+  if (process.status !== 'aprovado') {
+    throw APP_ERROR.BAD_REQUEST('Onboarding deve estar aprovado antes de confirmar depósito');
+  }
+
+  const existingCotista = await prisma.cotista.findUnique({
+    where: { partyId: process.partyId },
+  });
+  if (existingCotista) {
+    throw APP_ERROR.CONFLICT('Cotista já possui aporte confirmado para este cadastro');
+  }
+
+  const quotaType = input.quotaType ?? process.quotaType ?? 'senior_i';
+  const quotaCount = input.quotaCount ?? 0;
+  const now = new Date();
+
+  const cotistaId = await prisma.$transaction(async (tx) => {
+    const cotista = await tx.cotista.create({
+      data: {
+        partyId: process.partyId,
+        investorProfile: process.suitabilityResponse?.resultProfile,
+        suitabilityResult: process.suitabilityResponse?.resultProfile,
+      },
+    });
+
+    await tx.partyFundLink.create({
+      data: {
+        partyId: process.partyId,
+        fundId: process.fundId,
+        quotaType,
+        initialInvestment: input.amount,
+        currentPrincipal: input.amount,
+        quotaCount: quotaCount > 0 ? quotaCount : 0,
+        quotaAmount: input.amount,
+        contractStartDate: now,
+      },
+    });
+
+    await tx.fundTransaction.create({
+      data: {
+        fundId: process.fundId,
+        type: 'aporte',
+        counterpartyKind: 'cotista',
+        partyId: process.partyId,
+        amount: input.amount,
+        signedAmount: input.amount,
+        description: 'Aporte inicial — confirmação de depósito',
+        proofUri: input.proofUri ?? null,
+        status: 'aprovado',
+        occurredAt: now,
+        createdById: userId,
+      },
+    });
+
+    if (input.bankAccount) {
+      await tx.partyBankAccount.deleteMany({ where: { partyId: process.partyId } });
+      await tx.partyBankAccount.create({
+        data: {
+          partyId: process.partyId,
+          bankCode: input.bankAccount.bankCode,
+          branch: input.bankAccount.branch,
+          account: input.bankAccount.account,
+          accountType: input.bankAccount.accountType ?? 'corrente',
+          isPrimary: true,
+          approvedBy: userId,
+          approvedAt: now,
+        },
+      });
+    }
+
+    return cotista.id;
+  });
+
+  await logAudit({
+    userId,
+    action: 'onboarding.confirm_deposit',
+    entityType: 'onboarding_process',
+    entityId: process.id,
+    details: { amount: input.amount, cotistaId },
+    ipAddress: ip,
+  });
+
+  try {
+    const { ensureFimApplicationForParty } = await import('../lib/nextcorefim/fim-documents.js');
+    await ensureFimApplicationForParty(process.partyId);
+  } catch (err) {
+    console.warn('[onboarding.confirmDeposit] ensure FIM application failed (non-fatal):', err);
+  }
+
+  try {
+    const { backfillPartyFundLinkYields } = await import('./cotista-yield.service.js');
+    const link = await prisma.partyFundLink.findFirst({
+      where: { partyId: process.partyId, fundId: process.fundId, quotaType },
+    });
+    if (link) await backfillPartyFundLinkYields(link.id);
+  } catch (err) {
+    console.warn('[onboarding.confirmDeposit] backfill yields failed (non-fatal):', err);
+  }
+
+  try {
+    const { maybeAlertFragmentedAportes } = await import('./transaction-alerts.service.js');
+    await maybeAlertFragmentedAportes(process.partyId, process.fundId, userId);
+  } catch (err) {
+    console.warn('[onboarding.confirmDeposit] fragmented alert failed (non-fatal):', err);
+  }
+
+  const cotista = await mapCotistaFull(cotistaId);
+  return { cotista };
 }
 
 export async function rejectOnboarding(

@@ -3,6 +3,7 @@ import type { AlertSeverity, AlertStatus, Prisma } from '@prisma/client';
 import { router, permissionProcedure } from '../trpc/procedures.js';
 import { prisma } from '../db/index.js';
 import { APP_ERROR } from '../lib/errors.js';
+import { computeFundComplianceStatus } from '../services/compliance-fund.service.js';
 
 function mapAlert(row: {
   id: string;
@@ -48,17 +49,13 @@ export const complianceRouter = router({
       return rows.map(mapAlert);
     }),
 
-  /** Stub estável até spec 008 (semáforo FIDC / alocação). */
   getFundStatus: permissionProcedure('compliance.read')
     .input(z.object({ fundId: z.string().uuid() }))
-    .query(({ input }) => ({
-      fundId: input.fundId,
-      statusCompliance: 'conforme' as const,
-      alocacoes: {} as Record<string, number>,
-      limiteMinimo: null as number | null,
-      violacoes: [] as string[],
-      checkedAt: new Date().toISOString(),
-    })),
+    .query(async ({ input }) => {
+      const status = await computeFundComplianceStatus(input.fundId);
+      if (!status) throw APP_ERROR.NOT_FOUND('Fundo');
+      return status;
+    }),
 
   investigateAlert: permissionProcedure('compliance.investigate')
     .input(z.object({ alertId: z.string().uuid() }))

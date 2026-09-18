@@ -10,6 +10,9 @@ import { auditRouter } from '../routers/audit.router.js';
 import { dashboardRouter } from '../routers/dashboard.router.js';
 import { kycRouter } from '../routers/kyc.router.js';
 import { complianceRouter } from '../routers/compliance.router.js';
+import { investidosRouter } from '../routers/investidos.router.js';
+import { transactionsRouter } from '../routers/transactions.router.js';
+import { reportsRouter } from '../routers/reports.router.js';
 
 export const appRouter = router({
   health: healthRouter,
@@ -25,6 +28,9 @@ export const appRouter = router({
   dashboard: dashboardRouter,
   kyc: kycRouter,
   compliance: complianceRouter,
+  investidos: investidosRouter,
+  transactions: transactionsRouter,
+  reports: reportsRouter,
 });
 
 export type AppRouter = typeof appRouter;

@@ -46,12 +46,15 @@ const PERMISSIONS = [
   { key: 'audit.read', description: 'Consultar auditoria', module: 'audit' },
   { key: 'arquivo.read', description: 'Consultar arquivo de evidências', module: 'arquivo' },
   { key: 'admin.manage_access', description: 'Gerenciar usuários e permissões', module: 'admin' },
+  { key: 'investidos.read', description: 'Listar investidos', module: 'investidos' },
+  { key: 'investidos.write', description: 'Registrar investidos', module: 'investidos' },
+  { key: 'reports.read', description: 'Gerar relatórios', module: 'reports' },
 ] as const;
 
 /** Perfis de referência para seed (overrides por usuário — não há mais grupos). */
 const PROFILE_PERMISSIONS: Record<string, string[]> = {
   Administrador: PERMISSIONS.map((p) => p.key),
-  Compliance: [
+  compliance_director: [
     'dashboard.read',
     'fundos.read',
     'fundos.write',
@@ -76,15 +79,23 @@ const PROFILE_PERMISSIONS: Record<string, string[]> = {
     'regulatory.approve',
     'audit.read',
     'arquivo.read',
+    'reports.read',
   ],
   Gestão: [
     'dashboard.read',
     'fundos.read',
+    'fundos.write',
+    'onboarding.read',
     'cotistas.read',
+    'cotistas.write',
     'cedentes.read',
+    'documents.write',
+    'investidos.read',
+    'investidos.write',
     'transactions.read',
     'transactions.write',
     'transactions.approve',
+    'reports.read',
   ],
   Operacional: [
     'dashboard.read',
@@ -146,6 +157,22 @@ const MENU_ITEMS = [
     icon: 'arrow-left-right',
     sortOrder: 70,
     perm: 'transactions.read',
+  },
+  {
+    key: 'menu-investidos',
+    label: 'Investidos',
+    route: '/investidos',
+    icon: 'landmark',
+    sortOrder: 72,
+    perm: 'investidos.read',
+  },
+  {
+    key: 'menu-relatorios',
+    label: 'Relatórios',
+    route: '/relatorios',
+    icon: 'file-text',
+    sortOrder: 73,
+    perm: 'reports.read',
   },
   {
     key: 'menu-kyc',
@@ -213,9 +240,15 @@ const SEED_USERS = [
     isAdmin: true,
   },
   {
+    email: 'compliance.director@indexcore.local',
+    name: 'Diretor de Compliance',
+    profile: 'compliance_director',
+    isAdmin: false,
+  },
+  {
     email: 'compliance@indexcore.local',
-    name: 'Compliance',
-    profile: 'Compliance',
+    name: 'Diretor de Compliance',
+    profile: 'compliance_director',
     isAdmin: false,
   },
   { email: 'gestao@indexcore.local', name: 'Gestão', profile: 'Gestão', isAdmin: false },

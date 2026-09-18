@@ -105,6 +105,21 @@ export const cotistasRouter = router({
       cotistaService.rejectCotista(input.id, input.reason, ctx.user.id, ctx.ip),
     ),
 
+  upsertBankAccount: permissionProcedure('cotistas.write')
+    .input(
+      z.object({
+        id: z.string().uuid(),
+        bankCode: z.string().min(1),
+        branch: z.string().min(1),
+        account: z.string().min(1),
+        accountType: z.string().optional(),
+      }),
+    )
+    .mutation(({ input, ctx }) => {
+      const { id, ...data } = input;
+      return cotistaService.upsertCotistaBankAccount(id, data, ctx.user.id, ctx.ip);
+    }),
+
   getFimDocuments: permissionProcedure('cotistas.view_kyc')
     .input(z.object({ id: z.string().uuid() }))
     .query(async ({ input, ctx }) => {

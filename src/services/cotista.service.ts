@@ -719,3 +719,47 @@ export async function updateCotista(
 
   return mapCotistaFull(id);
 }
+
+export type PartyBankAccountInput = {
+  bankCode: string;
+  branch: string;
+  account: string;
+  accountType?: string;
+};
+
+export async function upsertCotistaBankAccount(
+  cotistaId: string,
+  data: PartyBankAccountInput,
+  userId: string,
+  ip?: string,
+) {
+  const cotista = await prisma.cotista.findUnique({ where: { id: cotistaId } });
+  if (!cotista) throw APP_ERROR.NOT_FOUND('Cotista');
+
+  const now = new Date();
+  await prisma.$transaction(async (tx) => {
+    await tx.partyBankAccount.deleteMany({ where: { partyId: cotista.partyId } });
+    await tx.partyBankAccount.create({
+      data: {
+        partyId: cotista.partyId,
+        bankCode: data.bankCode,
+        branch: data.branch,
+        account: data.account,
+        accountType: data.accountType ?? 'corrente',
+        isPrimary: true,
+        approvedBy: userId,
+        approvedAt: now,
+      },
+    });
+  });
+
+  await logAudit({
+    userId,
+    action: 'cotista.bank_account.upsert',
+    entityType: 'cotista',
+    entityId: cotistaId,
+    ipAddress: ip,
+  });
+
+  return mapCotistaFull(cotistaId);
+}

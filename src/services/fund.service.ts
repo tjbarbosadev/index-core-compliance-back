@@ -2,6 +2,11 @@ import type { FundModality, FundStatus, Prisma } from '@prisma/client';
 import { prisma } from '../db/index.js';
 import { APP_ERROR, DEFAULT_REGULATORY_LIMITS } from '../lib/errors.js';
 import { logAudit } from './audit.service.js';
+import {
+  balanceForPartyFundLink,
+  netWorthByFundIds,
+  sumFundNetWorthFromLinks,
+} from './fund-pl.service.js';
 
 export type FundExtraInfo = {
   regulator?: string;
@@ -40,6 +45,15 @@ export type CreateFundInput = {
   extraInfoJson?: FundExtraInfo;
 };
 
+export type FundBankAccountInput = {
+  bankCode: string;
+  bankName?: string;
+  branch: string;
+  account: string;
+  accountType?: string;
+  pixKey?: string;
+};
+
 type FundRow = {
   id: string;
   name: string;
@@ -60,7 +74,36 @@ type FundRow = {
   createdAt: Date;
   updatedAt: Date;
   netWorthHistory?: { referenceDate: Date; netWorth: Prisma.Decimal }[];
+  bankAccount?: {
+    id: string;
+    bankCode: string;
+    bankName: string | null;
+    branch: string;
+    account: string;
+    accountType: string;
+    pixKey: string | null;
+  } | null;
+  currentNetWorth?: number;
+  shareholders?: Array<{
+    cotistaId?: string;
+    partyId: string;
+    legalName: string;
+    cpfCnpj: string;
+    quotaType: string;
+    balance: number;
+  }>;
 };
+
+function mapBankAccount(row: NonNullable<FundRow['bankAccount']>) {
+  return {
+    bankCode: row.bankCode,
+    bankName: row.bankName ?? undefined,
+    branch: row.branch,
+    account: row.account,
+    accountType: row.accountType,
+    pixKey: row.pixKey ?? undefined,
+  };
+}
 
 function mapFund(fund: FundRow) {
   return {
@@ -87,6 +130,9 @@ function mapFund(fund: FundRow) {
       date: h.referenceDate.toISOString().slice(0, 10),
       netWorth: Number(h.netWorth),
     })),
+    bankAccount: fund.bankAccount ? mapBankAccount(fund.bankAccount) : undefined,
+    currentNetWorth: fund.currentNetWorth,
+    shareholders: fund.shareholders,
     complianceStatus: 'conforme' as const,
   };
 }
@@ -119,24 +165,60 @@ function toFundData(input: Partial<CreateFundInput>): Prisma.FundUpdateInput {
   return data;
 }
 
+async function loadShareholders(fundId: string) {
+  const links = await prisma.partyFundLink.findMany({
+    where: { fundId },
+    include: {
+      party: { include: { cotista: { select: { id: true } } } },
+      dailyYields: { orderBy: { referenceDate: 'desc' }, take: 1 },
+    },
+    orderBy: { linkedAt: 'asc' },
+  });
+  return links.map((link) => ({
+    cotistaId: link.party.cotista?.id,
+    partyId: link.partyId,
+    legalName: link.party.legalName,
+    cpfCnpj: link.party.cpfCnpj,
+    quotaType: link.quotaType,
+    balance: balanceForPartyFundLink(link),
+  }));
+}
+
 export async function listFunds(filters?: { status?: FundStatus; modality?: FundModality }) {
   const funds = await prisma.fund.findMany({
     where: {
       status: filters?.status,
       modality: filters?.modality,
     },
-    include: { netWorthHistory: { orderBy: { referenceDate: 'desc' }, take: 5 } },
+    include: {
+      netWorthHistory: { orderBy: { referenceDate: 'desc' }, take: 5 },
+      bankAccount: true,
+    },
     orderBy: { name: 'asc' },
   });
-  return funds.map(mapFund);
+  const plMap = await netWorthByFundIds(funds.map((f) => f.id));
+  return funds.map((fund) =>
+    mapFund({
+      ...fund,
+      currentNetWorth: plMap.get(fund.id) ?? 0,
+    }),
+  );
 }
 
 export async function getFundById(id: string) {
   const fund = await prisma.fund.findUnique({
     where: { id },
-    include: { netWorthHistory: { orderBy: { referenceDate: 'desc' } } },
+    include: {
+      netWorthHistory: { orderBy: { referenceDate: 'desc' } },
+      bankAccount: true,
+    },
   });
-  return fund ? mapFund(fund) : null;
+  if (!fund) return null;
+  const [currentNetWorth, shareholders] = await Promise.all([
+    sumFundNetWorthFromLinks(id),
+    loadShareholders(id),
+  ]);
+  return mapFund({ ...fund, currentNetWorth, shareholders });
 }
 
 export async function createFund(input: CreateFundInput, userId?: string, ip?: string) {
@@ -163,7 +245,7 @@ export async function createFund(input: CreateFundInput, userId?: string, ip?: s
       regulatoryLimitsJson: limits,
       extraInfoJson: (input.extraInfoJson ?? {}) as Prisma.InputJsonValue,
     },
-    include: { netWorthHistory: true },
+    include: { netWorthHistory: true, bankAccount: true },
   });
 
   await logAudit({
@@ -174,7 +256,7 @@ export async function createFund(input: CreateFundInput, userId?: string, ip?: s
     ipAddress: ip,
   });
 
-  return mapFund(fund);
+  return mapFund({ ...fund, currentNetWorth: 0, shareholders: [] });
 }
 
 export async function updateFund(
@@ -186,7 +268,10 @@ export async function updateFund(
   const fund = await prisma.fund.update({
     where: { id },
     data: toFundData(input),
-    include: { netWorthHistory: { orderBy: { referenceDate: 'desc' } } },
+    include: {
+      netWorthHistory: { orderBy: { referenceDate: 'desc' } },
+      bankAccount: true,
+    },
   });
 
   await logAudit({
@@ -197,5 +282,47 @@ export async function updateFund(
     ipAddress: ip,
   });
 
-  return mapFund(fund);
+  const currentNetWorth = await sumFundNetWorthFromLinks(id);
+  return mapFund({ ...fund, currentNetWorth });
+}
+
+export async function upsertFundBankAccount(
+  fundId: string,
+  data: FundBankAccountInput,
+  userId?: string,
+  ip?: string,
+) {
+  const fund = await prisma.fund.findUnique({ where: { id: fundId } });
+  if (!fund) throw APP_ERROR.NOT_FOUND('Fundo');
+
+  const row = await prisma.fundBankAccount.upsert({
+    where: { fundId },
+    update: {
+      bankCode: data.bankCode,
+      bankName: data.bankName ?? null,
+      branch: data.branch,
+      account: data.account,
+      accountType: data.accountType ?? 'corrente',
+      pixKey: data.pixKey ?? null,
+    },
+    create: {
+      fundId,
+      bankCode: data.bankCode,
+      bankName: data.bankName ?? null,
+      branch: data.branch,
+      account: data.account,
+      accountType: data.accountType ?? 'corrente',
+      pixKey: data.pixKey ?? null,
+    },
+  });
+
+  await logAudit({
+    userId,
+    action: 'funds.bank_account.upsert',
+    entityType: 'fund',
+    entityId: fundId,
+    ipAddress: ip,
+  });
+
+  return mapBankAccount(row);
 }
