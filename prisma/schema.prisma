@@ -261,6 +261,7 @@ model User {
   documentsUploaded   Document[]               @relation("DocumentUploader")
   documentsValidated  Document[]               @relation("DocumentValidator")
   kycReports          KycReport[]
+  whatsappSession     WhatsappSession?
 
   @@map("users")
 }
@@ -822,11 +823,31 @@ model AmortizationAlertDelivery {
   channel       AmortizationAlertChannel
   /** Telegram: ''; WhatsApp: E.164 normalizado (ex. 5511...). */
   destination   String                          @default("") @db.Text
+  /** d1_am | d1_pm | d0_am | d0_pm — idempotência por horário do lembrete. */
+  slot          String                          @default("d1_am") @db.VarChar(16)
   status        AmortizationAlertDeliveryStatus @default(sent)
   createdAt     DateTime                        @default(now()) @map("created_at") @db.Timestamptz
 
-  @@unique([referenceDate, channel, destination])
+  @@unique([referenceDate, channel, destination, slot])
   @@map("amortization_alert_deliveries")
+}
+
+model WhatsappSession {
+  id               String    @id @default(uuid()) @db.Uuid
+  userId           String    @unique @map("user_id") @db.Uuid
+  phone            String?   @db.VarChar(32)
+  phoneNormalized  String?   @map("phone_normalized") @db.VarChar(20)
+  openwaSessionId  String?   @map("openwa_session_id") @db.VarChar(64)
+  status           String    @default("pending") @db.VarChar(32)
+  connectedAt      DateTime? @map("connected_at") @db.Timestamptz
+  createdAt        DateTime  @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt        DateTime  @updatedAt @map("updated_at") @db.Timestamptz
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([status])
+  @@index([phoneNormalized])
+  @@map("whatsapp_sessions")
 }
 
 // ============================================================================

@@ -129,6 +129,12 @@ describe('buildAmortizationAlertMessage', () => {
     expect(two).toContain('2 posições');
   });
 
+  it('C01 today: uses Hoje headline', () => {
+    const msg = buildAmortizationAlertMessage([link({ id: '1' })], TARGET, { when: 'today' });
+    expect(msg).toContain('Hoje (31/01/2026)');
+    expect(msg).not.toContain('Amanhã');
+  });
+
   it('C02: does not expose UUIDs or partyFundLinkId', () => {
     const msg = buildAmortizationAlertMessage(
       [link({ id: 'a1b2c3d4-e5f6-7890-abcd-ef1234567890' })],
@@ -168,6 +174,7 @@ describe('runAmortizationAlertJob', () => {
   it('J01: enabled false skips without calling findLinks', async () => {
     const findLinks = vi.fn(async () => [link({ id: '1' })]);
     const result = await runAmortizationAlertJob({
+      readyPhones: [],
       now: NOW,
       enabled: false,
       findLinks,
@@ -175,6 +182,7 @@ describe('runAmortizationAlertJob', () => {
     expect(findLinks).not.toHaveBeenCalled();
     expect(result).toEqual({
       targetDate: TARGET,
+      slot: 'd1_am',
       count: 0,
       skipped: true,
       reason: 'disabled',
@@ -184,6 +192,7 @@ describe('runAmortizationAlertJob', () => {
   it('T08: count 0 does not call sendTelegram', async () => {
     const sendTelegram = vi.fn();
     const result = await runAmortizationAlertJob({
+      readyPhones: [],
       now: NOW,
       enabled: true,
       telegramBotToken: 'tok',
@@ -200,6 +209,7 @@ describe('runAmortizationAlertJob', () => {
     const recordDelivery = vi.fn();
     const findDelivery = vi.fn();
     const result = await runAmortizationAlertJob({
+      readyPhones: [],
       now: NOW,
       enabled: true,
       telegramBotToken: '',
@@ -221,6 +231,7 @@ describe('runAmortizationAlertJob', () => {
     const findDelivery = vi.fn().mockResolvedValue(false);
     const recordDelivery = vi.fn().mockResolvedValue(undefined);
     const result = await runAmortizationAlertJob({
+      readyPhones: [],
       now: NOW,
       enabled: true,
       telegramBotToken: 'tok',
@@ -233,7 +244,7 @@ describe('runAmortizationAlertJob', () => {
     });
     expect(result.reason).toBe('ok');
     expect(sendTelegram).toHaveBeenCalledOnce();
-    expect(recordDelivery).toHaveBeenCalledWith(TARGET, 'telegram', '');
+    expect(recordDelivery).toHaveBeenCalledWith(TARGET, 'telegram', '', 'd1_am');
     const payload = sendTelegram.mock.calls[0]![0] as { text: string };
     expect(payload.text).toContain('Cotista Teste / Fundo Teste');
     expect(payload.text).not.toMatch(UUID_RE);
@@ -243,6 +254,7 @@ describe('runAmortizationAlertJob', () => {
     const sendTelegram = vi.fn();
     const recordDelivery = vi.fn();
     const result = await runAmortizationAlertJob({
+      readyPhones: [],
       now: NOW,
       enabled: true,
       telegramBotToken: 'tok',
@@ -262,6 +274,7 @@ describe('runAmortizationAlertJob', () => {
     const sendTelegram = vi.fn().mockResolvedValue({ sent: false, reason: 'error' });
     const recordDelivery = vi.fn();
     const result = await runAmortizationAlertJob({
+      readyPhones: [],
       now: NOW,
       enabled: true,
       telegramBotToken: 'tok',
@@ -282,6 +295,7 @@ describe('runAmortizationAlertJob', () => {
     const recordDelivery = vi.fn().mockResolvedValue(undefined);
     const findDelivery = vi.fn(async (_ref: string, channel: string) => channel === 'telegram');
     const result = await runAmortizationAlertJob({
+      readyPhones: [],
       now: NOW,
       enabled: true,
       telegramBotToken: 'tok',
@@ -298,7 +312,7 @@ describe('runAmortizationAlertJob', () => {
     });
     expect(sendTelegram).not.toHaveBeenCalled();
     expect(sendWhatsapp).toHaveBeenCalledOnce();
-    expect(recordDelivery).toHaveBeenCalledWith(TARGET, 'whatsapp', '5511987654321');
+    expect(recordDelivery).toHaveBeenCalledWith(TARGET, 'whatsapp', '5511987654321', 'd1_am');
     expect(result.channels?.some((c) => c.channel === 'whatsapp' && c.reason === 'sent')).toBe(
       true,
     );
@@ -311,6 +325,7 @@ describe('runAmortizationAlertJob', () => {
       .mockResolvedValueOnce({ sent: false, reason: 'error' });
     const recordDelivery = vi.fn().mockResolvedValue(undefined);
     const result = await runAmortizationAlertJob({
+      readyPhones: [],
       now: NOW,
       enabled: true,
       telegramBotToken: '',
@@ -327,7 +342,7 @@ describe('runAmortizationAlertJob', () => {
     });
     expect(sendWhatsapp).toHaveBeenCalledTimes(2);
     expect(recordDelivery).toHaveBeenCalledOnce();
-    expect(recordDelivery).toHaveBeenCalledWith(TARGET, 'whatsapp', '5511987654321');
+    expect(recordDelivery).toHaveBeenCalledWith(TARGET, 'whatsapp', '5511987654321', 'd1_am');
     // Partial success → overall ok; failed destination not recorded (retry next run)
     expect(result.reason).toBe('ok');
     expect(result.channels).toEqual(
@@ -350,6 +365,7 @@ describe('runAmortizationAlertJob', () => {
     const recordDelivery = vi.fn();
     const sendWhatsapp = vi.fn();
     const result = await runAmortizationAlertJob({
+      readyPhones: [],
       now: NOW,
       enabled: true,
       telegramBotToken: '',
@@ -371,6 +387,7 @@ describe('runAmortizationAlertJob', () => {
     const sendWhatsapp = vi.fn().mockResolvedValue({ sent: true, reason: 'sent' });
     const recordDelivery = vi.fn().mockResolvedValue(undefined);
     await runAmortizationAlertJob({
+      readyPhones: [],
       now: NOW,
       enabled: true,
       telegramBotToken: '',
@@ -392,6 +409,7 @@ describe('runAmortizationAlertJob', () => {
 
   it('returns count for eligible links with injected now and findLinks', async () => {
     const result = await runAmortizationAlertJob({
+      readyPhones: [],
       now: NOW,
       enabled: true,
       telegramBotToken: '',
@@ -406,6 +424,7 @@ describe('runAmortizationAlertJob', () => {
 
   it('returns count 0 when none eligible', async () => {
     const result = await runAmortizationAlertJob({
+      readyPhones: [],
       now: NOW,
       enabled: true,
       findLinks: async () => [link({ id: '1', quotaType: 'senior_ii' })],
@@ -417,6 +436,7 @@ describe('runAmortizationAlertJob', () => {
 
   it('swallows findLinks errors and returns count 0', async () => {
     const result = await runAmortizationAlertJob({
+      readyPhones: [],
       now: NOW,
       enabled: true,
       findLinks: async () => {
@@ -432,6 +452,7 @@ describe('runAmortizationAlertJob', () => {
     const target = toYYYYMMDD(addDays(start, 30));
     const now = new Date('2025-12-31T15:00:00Z');
     const result = await runAmortizationAlertJob({
+      readyPhones: [],
       now,
       enabled: true,
       telegramBotToken: '',
@@ -450,6 +471,7 @@ describe('runAmortizationAlertJob', () => {
   it('does not throw when findLinks rejects (defensive for daily)', async () => {
     await expect(
       runAmortizationAlertJob({
+        readyPhones: [],
         now: NOW,
         enabled: true,
         findLinks: () => Promise.reject(new Error('boom')),
@@ -462,6 +484,7 @@ describe('runAmortizationAlertJob logging', () => {
   it('logs summary without technical ids', async () => {
     const spy = vi.spyOn(console, 'log').mockImplementation(() => {});
     await runAmortizationAlertJob({
+      readyPhones: [],
       now: NOW,
       enabled: true,
       telegramBotToken: '',
@@ -485,9 +508,86 @@ describe('runAmortizationAlertJob logging', () => {
 
   it('logs disabled when flag off', async () => {
     const spy = vi.spyOn(console, 'log').mockImplementation(() => {});
-    await runAmortizationAlertJob({ now: NOW, enabled: false });
+    await runAmortizationAlertJob({ readyPhones: [], now: NOW, enabled: false });
     const joined = spy.mock.calls.map((c) => c.join(' ')).join('\n');
     expect(joined).toContain('reason=disabled');
     spy.mockRestore();
+  });
+});
+
+describe('amortization alert slots', () => {
+  it('d0_am uses today as targetDate and Hoje message', async () => {
+    const sendTelegram = vi.fn().mockResolvedValue({ sent: true, reason: 'sent' });
+    const recordDelivery = vi.fn().mockResolvedValue(undefined);
+    // NOW is 2026-01-30 BRT afternoon → today 2026-01-30; need due on that day
+    const dueToday = '2026-01-30';
+    const start = parseYYYYMMDD('2025-12-31'); // +30 = 2026-01-30
+    const result = await runAmortizationAlertJob({
+      readyPhones: [],
+      now: NOW,
+      slot: 'd0_am',
+      enabled: true,
+      telegramBotToken: 'tok',
+      telegramChatId: '123',
+      whatsappTo: '',
+      findLinks: async () => [link({ id: '1', contractStartDate: start })],
+      sendTelegram,
+      findDelivery: async () => false,
+      recordDelivery,
+    });
+    expect(result.targetDate).toBe(dueToday);
+    expect(result.slot).toBe('d0_am');
+    expect(sendTelegram.mock.calls[0]![0].text).toContain('Hoje (30/01/2026)');
+    expect(recordDelivery).toHaveBeenCalledWith(dueToday, 'telegram', '', 'd0_am');
+  });
+
+  it('same destination different slots both send', async () => {
+    const sendWhatsapp = vi.fn().mockResolvedValue({ sent: true, reason: 'sent' });
+    const sentSlots = new Set<string>();
+    const findDelivery = vi.fn(async (_r, _c, _d, slot: string) => sentSlots.has(slot));
+    const recordDelivery = vi.fn(async (_r, _c, _d, slot: string) => {
+      sentSlots.add(slot);
+    });
+    const base = {
+      readyPhones: ['5511999999999'],
+      now: NOW,
+      enabled: true,
+      telegramBotToken: '',
+      telegramChatId: '',
+      openWaBaseUrl: 'http://crm_openwa:2785',
+      openWaApiKey: 'key',
+      openWaSessionId: 'sess-1',
+      whatsappTo: '',
+      findLinks: async () => [link({ id: '1' })],
+      sendWhatsapp,
+      findDelivery,
+      recordDelivery,
+    };
+    await runAmortizationAlertJob({ ...base, slot: 'd1_am' });
+    await runAmortizationAlertJob({ ...base, slot: 'd1_pm' });
+    expect(sendWhatsapp).toHaveBeenCalledTimes(2);
+    expect(recordDelivery).toHaveBeenCalledWith(TARGET, 'whatsapp', '5511999999999', 'd1_am');
+    expect(recordDelivery).toHaveBeenCalledWith(TARGET, 'whatsapp', '5511999999999', 'd1_pm');
+  });
+
+  it('ready session phones receive without env list', async () => {
+    const sendWhatsapp = vi.fn().mockResolvedValue({ sent: true, reason: 'sent' });
+    await runAmortizationAlertJob({
+      readyPhones: ['5511970547356'],
+      now: NOW,
+      enabled: true,
+      telegramBotToken: '',
+      telegramChatId: '',
+      openWaBaseUrl: 'http://crm_openwa:2785',
+      openWaApiKey: 'key',
+      openWaSessionId: 'sess-1',
+      whatsappTo: '',
+      findLinks: async () => [link({ id: '1' })],
+      sendWhatsapp,
+      findDelivery: async () => false,
+      recordDelivery: async () => undefined,
+    });
+    expect(sendWhatsapp).toHaveBeenCalledOnce();
+    expect(sendWhatsapp.mock.calls[0]![0].to).toBe('5511970547356');
   });
 });

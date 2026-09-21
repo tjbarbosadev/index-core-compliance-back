@@ -1,6 +1,6 @@
 import cron from 'node-cron';
 import { prisma } from '../db/index.js';
-import { runAmortizationAlertJob } from '../services/amortization-alert.service.js';
+import { runAmortizationAlertSlotBatch } from '../services/amortization-alert.service.js';
 import { runDailyYieldJob } from '../services/cotista-yield.service.js';
 
 const CRON_TZ = 'America/Sao_Paulo';
@@ -17,17 +17,23 @@ export async function runDailyJobs(): Promise<void> {
     console.error('[job] falha ao gravar yields diários', err);
     throw err;
   }
-  try {
-    await runAmortizationAlertJob();
-  } catch (err) {
-    console.error('[job] falha no alerta de amortização', err);
-  }
+  // Amortization alerts moved to 09:00 / 15:00 BRT (4 slots).
   try {
     await runKycRenewalJob();
   } catch (err) {
     console.error('[job] falha na renovação KYC 6 meses', err);
   }
   console.log(`[job] daily 06:00 ${CRON_TZ} finished`);
+}
+
+export async function runAmortizationAlertJobs(period: 'am' | 'pm'): Promise<void> {
+  console.log(`[job] amortization-alert ${period} ${CRON_TZ} started`);
+  try {
+    await runAmortizationAlertSlotBatch(period);
+  } catch (err) {
+    console.error('[job] falha no alerta de amortização', err);
+  }
+  console.log(`[job] amortization-alert ${period} ${CRON_TZ} finished`);
 }
 
 export function registerScheduledJobs() {
@@ -40,7 +46,25 @@ export function registerScheduledJobs() {
     },
     { timezone: CRON_TZ },
   );
-  console.log(`[scheduler] registered daily jobs at 06:00 ${CRON_TZ}`);
+  cron.schedule(
+    '0 9 * * *',
+    () => {
+      void runAmortizationAlertJobs('am').catch((err) => {
+        console.error('[job] amortization am failed', err);
+      });
+    },
+    { timezone: CRON_TZ },
+  );
+  cron.schedule(
+    '0 15 * * *',
+    () => {
+      void runAmortizationAlertJobs('pm').catch((err) => {
+        console.error('[job] amortization pm failed', err);
+      });
+    },
+    { timezone: CRON_TZ },
+  );
+  console.log(`[scheduler] registered daily 06:00 + amortization 09:00/15:00 ${CRON_TZ}`);
 }
 
 async function checkOnboardingExpiration() {

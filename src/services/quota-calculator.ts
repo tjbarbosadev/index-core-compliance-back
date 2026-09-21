@@ -78,6 +78,11 @@ export function getCalendarDateInSaoPaulo(today = new Date()): Date {
   return new Date(Date.UTC(y, m - 1, d, 12));
 }
 
+/** Hoje no calendário civil BRT (YYYY-MM-DD). */
+export function todayYYYYMMDD(now = new Date()): string {
+  return toYYYYMMDD(getCalendarDateInSaoPaulo(now));
+}
+
 /** Amanhã no calendário civil BRT (YYYY-MM-DD). */
 export function tomorrowYYYYMMDD(now = new Date()): string {
   return toYYYYMMDD(addDays(getCalendarDateInSaoPaulo(now), 1));
