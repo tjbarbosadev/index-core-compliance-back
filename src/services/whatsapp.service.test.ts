@@ -1,6 +1,11 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
+  ensureAlertSession,
+  getSessionQr,
+  getSessionStatus,
   hasOpenWaDestination,
+  isOpenWaConfigured,
+  logoutSession,
   maskPhone,
   normalizeBrazilWaPhone,
   parseWhatsappDestinations,
@@ -38,7 +43,7 @@ describe('parseWhatsappDestinations', () => {
   });
 });
 
-describe('hasOpenWaDestination', () => {
+describe('hasOpenWaDestination / isOpenWaConfigured', () => {
   it('exige baseUrl, apiKey, session e destino válido', () => {
     expect(
       hasOpenWaDestination({
@@ -56,6 +61,72 @@ describe('hasOpenWaDestination', () => {
         to: 'bad',
       }),
     ).toBe(false);
+  });
+
+  it('isOpenWaConfigured só base+key', () => {
+    expect(isOpenWaConfigured({ baseUrl: '', apiKey: 'k' })).toBe(false);
+    expect(isOpenWaConfigured({ baseUrl: 'http://x', apiKey: 'k' })).toBe(true);
+  });
+});
+
+describe('session helpers', () => {
+  it('sem OpenWA → null / false', async () => {
+    expect(await ensureAlertSession({})).toBeNull();
+    expect(await getSessionStatus({})).toBeNull();
+    expect(await getSessionQr({})).toBeNull();
+    expect(await logoutSession({})).toBe(false);
+  });
+
+  it('ensureAlertSession cria, start e lê status', async () => {
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        text: async () => JSON.stringify([{ id: 's1', name: 'opcore-alerts', status: 'created' }]),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        text: async () => '{}',
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        text: async () =>
+          JSON.stringify({ id: 's1', name: 'opcore-alerts', status: 'qr_ready', phone: null }),
+      });
+
+    const session = await ensureAlertSession({
+      baseUrl: 'http://crm_openwa:2785',
+      apiKey: 'key',
+      sessionName: 'opcore-alerts',
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+    });
+    expect(session).toMatchObject({ id: 's1', status: 'qr_ready' });
+    expect(fetchImpl).toHaveBeenCalled();
+  });
+
+  it('getSessionQr retorna data URL', async () => {
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        text: async () => JSON.stringify([{ id: 's1', name: 'opcore-alerts' }]),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        text: async () => JSON.stringify({ qr: 'data:image/png;base64,abc' }),
+      });
+    const qr = await getSessionQr({
+      baseUrl: 'http://crm_openwa:2785',
+      apiKey: 'key',
+      sessionName: 'opcore-alerts',
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+    });
+    expect(qr).toBe('data:image/png;base64,abc');
   });
 });
 
