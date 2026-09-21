@@ -204,6 +204,7 @@ describe('runAmortizationAlertJob', () => {
       enabled: true,
       telegramBotToken: '',
       telegramChatId: '',
+      whatsappTo: '',
       findLinks: async () => [link({ id: '1' })],
       sendTelegram,
       findDelivery,
@@ -224,6 +225,7 @@ describe('runAmortizationAlertJob', () => {
       enabled: true,
       telegramBotToken: 'tok',
       telegramChatId: '123',
+      whatsappTo: '',
       findLinks: async () => [link({ id: '1' })],
       sendTelegram,
       findDelivery,
@@ -231,7 +233,7 @@ describe('runAmortizationAlertJob', () => {
     });
     expect(result.reason).toBe('ok');
     expect(sendTelegram).toHaveBeenCalledOnce();
-    expect(recordDelivery).toHaveBeenCalledWith(TARGET);
+    expect(recordDelivery).toHaveBeenCalledWith(TARGET, 'telegram', '');
     const payload = sendTelegram.mock.calls[0]![0] as { text: string };
     expect(payload.text).toContain('Cotista Teste / Fundo Teste');
     expect(payload.text).not.toMatch(UUID_RE);
@@ -245,6 +247,7 @@ describe('runAmortizationAlertJob', () => {
       enabled: true,
       telegramBotToken: 'tok',
       telegramChatId: '123',
+      whatsappTo: '',
       findLinks: async () => [link({ id: '1' })],
       sendTelegram,
       findDelivery: async () => true,
@@ -263,6 +266,7 @@ describe('runAmortizationAlertJob', () => {
       enabled: true,
       telegramBotToken: 'tok',
       telegramChatId: '123',
+      whatsappTo: '',
       findLinks: async () => [link({ id: '1' })],
       sendTelegram,
       findDelivery: async () => false,
@@ -270,6 +274,120 @@ describe('runAmortizationAlertJob', () => {
     });
     expect(result.reason).toBe('telegram_error');
     expect(recordDelivery).not.toHaveBeenCalled();
+  });
+
+  it('J05: telegram already sent still allows whatsapp', async () => {
+    const sendTelegram = vi.fn();
+    const sendWhatsapp = vi.fn().mockResolvedValue({ sent: true, reason: 'sent' });
+    const recordDelivery = vi.fn().mockResolvedValue(undefined);
+    const findDelivery = vi.fn(async (_ref: string, channel: string) => channel === 'telegram');
+    const result = await runAmortizationAlertJob({
+      now: NOW,
+      enabled: true,
+      telegramBotToken: 'tok',
+      telegramChatId: '123',
+      openWaBaseUrl: 'http://crm_openwa:2785',
+      openWaApiKey: 'key',
+      openWaSessionId: 'sess-1',
+      whatsappTo: '11987654321',
+      findLinks: async () => [link({ id: '1' })],
+      sendTelegram,
+      sendWhatsapp,
+      findDelivery,
+      recordDelivery,
+    });
+    expect(sendTelegram).not.toHaveBeenCalled();
+    expect(sendWhatsapp).toHaveBeenCalledOnce();
+    expect(recordDelivery).toHaveBeenCalledWith(TARGET, 'whatsapp', '5511987654321');
+    expect(result.channels?.some((c) => c.channel === 'whatsapp' && c.reason === 'sent')).toBe(
+      true,
+    );
+  });
+
+  it('I03: whatsapp per destination — one fail does not block other', async () => {
+    const sendWhatsapp = vi
+      .fn()
+      .mockResolvedValueOnce({ sent: true, reason: 'sent' })
+      .mockResolvedValueOnce({ sent: false, reason: 'error' });
+    const recordDelivery = vi.fn().mockResolvedValue(undefined);
+    const result = await runAmortizationAlertJob({
+      now: NOW,
+      enabled: true,
+      telegramBotToken: '',
+      telegramChatId: '',
+      openWaBaseUrl: 'http://crm_openwa:2785',
+      openWaApiKey: 'key',
+      openWaSessionId: 'sess-1',
+      whatsappTo: '11987654321,11888888888',
+      findLinks: async () => [link({ id: '1' })],
+      sendTelegram: async () => ({ sent: false, reason: 'skipped' }),
+      sendWhatsapp,
+      findDelivery: async () => false,
+      recordDelivery,
+    });
+    expect(sendWhatsapp).toHaveBeenCalledTimes(2);
+    expect(recordDelivery).toHaveBeenCalledOnce();
+    expect(recordDelivery).toHaveBeenCalledWith(TARGET, 'whatsapp', '5511987654321');
+    // Partial success → overall ok; failed destination not recorded (retry next run)
+    expect(result.reason).toBe('ok');
+    expect(result.channels).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          channel: 'whatsapp',
+          destination: '5511987654321',
+          reason: 'sent',
+        }),
+        expect.objectContaining({
+          channel: 'whatsapp',
+          destination: '5511888888888',
+          reason: 'error',
+        }),
+      ]),
+    );
+  });
+
+  it('I05 whatsapp: skip by missing config does not record sent', async () => {
+    const recordDelivery = vi.fn();
+    const sendWhatsapp = vi.fn();
+    const result = await runAmortizationAlertJob({
+      now: NOW,
+      enabled: true,
+      telegramBotToken: '',
+      telegramChatId: '',
+      whatsappTo: '11987654321',
+      openWaBaseUrl: '',
+      openWaApiKey: '',
+      findLinks: async () => [link({ id: '1' })],
+      sendWhatsapp,
+      findDelivery: async () => false,
+      recordDelivery,
+    });
+    expect(sendWhatsapp).not.toHaveBeenCalled();
+    expect(recordDelivery).not.toHaveBeenCalled();
+    expect(result.channels?.every((c) => c.reason === 'skipped')).toBe(true);
+  });
+
+  it('sends whatsapp to both Johny and Bruno with same text', async () => {
+    const sendWhatsapp = vi.fn().mockResolvedValue({ sent: true, reason: 'sent' });
+    const recordDelivery = vi.fn().mockResolvedValue(undefined);
+    await runAmortizationAlertJob({
+      now: NOW,
+      enabled: true,
+      telegramBotToken: '',
+      telegramChatId: '',
+      openWaBaseUrl: 'http://crm_openwa:2785',
+      openWaApiKey: 'key',
+      openWaSessionId: 'sess-1',
+      whatsappTo: '11911111111,11922222222',
+      findLinks: async () => [link({ id: '1' })],
+      sendWhatsapp,
+      findDelivery: async () => false,
+      recordDelivery,
+    });
+    expect(sendWhatsapp).toHaveBeenCalledTimes(2);
+    const texts = sendWhatsapp.mock.calls.map((c) => (c[0] as { text: string }).text);
+    expect(texts[0]).toBe(texts[1]);
+    expect(texts[0]).toContain('Cotista Teste');
   });
 
   it('returns count for eligible links with injected now and findLinks', async () => {

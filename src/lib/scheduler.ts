@@ -20,7 +20,7 @@ export async function runDailyJobs(): Promise<void> {
   try {
     await runAmortizationAlertJob();
   } catch (err) {
-    console.error('[job] falha no alerta de amortização (dry-run)', err);
+    console.error('[job] falha no alerta de amortização', err);
   }
   try {
     await runKycRenewalJob();

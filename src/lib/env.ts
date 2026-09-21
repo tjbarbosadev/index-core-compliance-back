@@ -80,7 +80,14 @@ export const env = {
   amortizationAlertTelegramChatId:
     process.env.AMORTIZATION_ALERT_TELEGRAM_CHAT_ID?.trim() || undefined,
   amortizationAlertEmail: process.env.AMORTIZATION_ALERT_EMAIL?.trim() || undefined,
+  /** Destinos WhatsApp (Johny/Bruno) — E.164 separados por vírgula. */
   amortizationAlertWhatsappTo: process.env.AMORTIZATION_ALERT_WHATSAPP_TO?.trim() || undefined,
+  /** OpenWA gateway (CRM `crm_openwa` na rede caddy). Todos opcionais — CI/boot sem secrets. */
+  openWaBaseUrl: process.env.OPENWA_BASE_URL?.trim().replace(/\/$/, '') || undefined,
+  openWaApiKey: process.env.OPENWA_API_KEY?.trim() || undefined,
+  /** Session id explícito; se vazio, resolve por `openWaSessionName`. */
+  openWaSessionId: process.env.OPENWA_SESSION_ID?.trim() || undefined,
+  openWaSessionName: process.env.OPENWA_SESSION_NAME?.trim() || 'opcore-alerts',
   /** Hub opcore-compliance — key vazia: API sobe; kyc.generate falha com mensagem clara. */
   complianceApiUrl: (
     process.env.COMPLIANCE_API_URL ?? 'https://api.compliance.opcore.com.br'

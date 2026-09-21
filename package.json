@@ -22,6 +22,8 @@
     "db:seed": "NODE_ENV=development tsx prisma/seed.ts",
     "db:backfill-yields": "NODE_ENV=development tsx prisma/backfill-yields.ts",
     "job:daily": "NODE_ENV=development tsx prisma/run-daily-job.ts",
+    "ping:telegram": "NODE_ENV=development tsx scripts/ping-telegram.ts",
+    "ping:whatsapp": "NODE_ENV=development tsx scripts/ping-whatsapp.ts",
     "simulate:019": "NODE_ENV=development tsx scripts/simulate-019-usecases.ts",
     "seed:fim-cotista": "NODE_ENV=development tsx scripts/seed-fim-cotista.ts",
     "fixtures:docs": "NODE_ENV=development tsx scripts/generate-doc-fixtures.ts",

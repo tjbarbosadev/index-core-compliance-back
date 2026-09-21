@@ -8,6 +8,13 @@ import {
   tomorrowYYYYMMDD,
 } from './quota-calculator.js';
 import { sendTelegramMessage, type SendTelegramResult } from './telegram.service.js';
+import {
+  hasOpenWaDestination,
+  parseWhatsappDestinations,
+  resolveOpenWaSessionId,
+  sendWhatsappMessage,
+  type SendWhatsappResult,
+} from './whatsapp.service.js';
 
 const SENIOR_I_QUOTA_TYPES = new Set(['senior_i', 'senior']);
 const MAX_LIST_LINES = 15;
@@ -21,11 +28,25 @@ export type AmortizationAlertLink = {
   fund: { name: string };
 };
 
+export type AmortizationAlertChannelResult = {
+  channel: 'telegram' | 'whatsapp';
+  destination: string;
+  reason: 'skipped' | 'already_sent' | 'error' | 'sent' | 'ok';
+};
+
 export type AmortizationAlertJobResult = {
   targetDate: string;
   count: number;
   skipped?: boolean;
-  reason?: 'disabled' | 'telegram_skipped' | 'ok' | 'already_sent' | 'telegram_error';
+  reason?:
+    | 'disabled'
+    | 'telegram_skipped'
+    | 'ok'
+    | 'already_sent'
+    | 'telegram_error'
+    | 'whatsapp_skipped'
+    | 'whatsapp_error';
+  channels?: AmortizationAlertChannelResult[];
 };
 
 export function hasTelegramDestination(token?: string | null, chatId?: string | null): boolean {
@@ -107,23 +128,33 @@ async function defaultFindLinks(): Promise<AmortizationAlertLink[]> {
   }));
 }
 
-async function defaultFindDelivery(referenceDate: string): Promise<boolean> {
+async function defaultFindDelivery(
+  referenceDate: string,
+  channel: 'telegram' | 'whatsapp',
+  destination: string,
+): Promise<boolean> {
   const row = await prisma.amortizationAlertDelivery.findFirst({
     where: {
       referenceDate: parseYYYYMMDD(referenceDate),
-      channel: 'telegram',
+      channel,
+      destination,
       status: 'sent',
     },
   });
   return Boolean(row);
 }
 
-async function defaultRecordDelivery(referenceDate: string): Promise<void> {
+async function defaultRecordDelivery(
+  referenceDate: string,
+  channel: 'telegram' | 'whatsapp',
+  destination: string,
+): Promise<void> {
   try {
     await prisma.amortizationAlertDelivery.create({
       data: {
         referenceDate: parseYYYYMMDD(referenceDate),
-        channel: 'telegram',
+        channel,
+        destination,
         status: 'sent',
       },
     });
@@ -135,9 +166,170 @@ async function defaultRecordDelivery(referenceDate: string): Promise<void> {
   }
 }
 
+type ChannelDeps = {
+  findDelivery: (
+    referenceDate: string,
+    channel: 'telegram' | 'whatsapp',
+    destination: string,
+  ) => Promise<boolean>;
+  recordDelivery: (
+    referenceDate: string,
+    channel: 'telegram' | 'whatsapp',
+    destination: string,
+  ) => Promise<void>;
+};
+
+async function deliverTelegramChannel(input: {
+  targetDate: string;
+  text: string;
+  telegramBotToken?: string;
+  telegramChatId?: string;
+  sendTelegram: (input: {
+    token?: string;
+    chatId?: string;
+    text: string;
+  }) => Promise<SendTelegramResult>;
+  deps: ChannelDeps;
+}): Promise<AmortizationAlertChannelResult> {
+  const destination = '';
+  if (!hasTelegramDestination(input.telegramBotToken, input.telegramChatId)) {
+    console.log('[job] amortization-alert telegram_skipped reason=missing_token_or_chat');
+    return { channel: 'telegram', destination, reason: 'skipped' };
+  }
+
+  let alreadySent = false;
+  try {
+    alreadySent = await input.deps.findDelivery(input.targetDate, 'telegram', destination);
+  } catch (err) {
+    console.error('[job] amortization-alert: falha ao consultar delivery telegram', err);
+  }
+
+  if (alreadySent) {
+    console.log(
+      `[job] amortization-alert already_sent target=${input.targetDate} channel=telegram`,
+    );
+    return { channel: 'telegram', destination, reason: 'already_sent' };
+  }
+
+  const sendResult = await input.sendTelegram({
+    token: input.telegramBotToken,
+    chatId: input.telegramChatId,
+    text: input.text,
+  });
+
+  if (!sendResult.sent) {
+    console.error('[job] amortization-alert telegram_error', sendResult.reason);
+    return { channel: 'telegram', destination, reason: 'error' };
+  }
+
+  try {
+    await input.deps.recordDelivery(input.targetDate, 'telegram', destination);
+  } catch (err) {
+    console.error('[job] amortization-alert: falha ao gravar delivery telegram', err);
+  }
+
+  console.log(`[job] amortization-alert sent target=${input.targetDate} channel=telegram`);
+  return { channel: 'telegram', destination, reason: 'sent' };
+}
+
+async function deliverWhatsappChannel(input: {
+  targetDate: string;
+  text: string;
+  to: string;
+  baseUrl?: string;
+  apiKey?: string;
+  sessionId?: string;
+  sendWhatsapp: (input: {
+    baseUrl?: string;
+    apiKey?: string;
+    sessionId?: string;
+    to?: string;
+    text: string;
+  }) => Promise<SendWhatsappResult>;
+  deps: ChannelDeps;
+}): Promise<AmortizationAlertChannelResult> {
+  const destination = input.to;
+  if (
+    !hasOpenWaDestination({
+      baseUrl: input.baseUrl,
+      apiKey: input.apiKey,
+      sessionId: input.sessionId,
+      to: input.to,
+    })
+  ) {
+    console.log(
+      `[job] amortization-alert whatsapp_skipped reason=missing_config destination=${destination}`,
+    );
+    return { channel: 'whatsapp', destination, reason: 'skipped' };
+  }
+
+  let alreadySent = false;
+  try {
+    alreadySent = await input.deps.findDelivery(input.targetDate, 'whatsapp', destination);
+  } catch (err) {
+    console.error('[job] amortization-alert: falha ao consultar delivery whatsapp', err);
+  }
+
+  if (alreadySent) {
+    console.log(
+      `[job] amortization-alert already_sent target=${input.targetDate} channel=whatsapp destination=${destination}`,
+    );
+    return { channel: 'whatsapp', destination, reason: 'already_sent' };
+  }
+
+  const sendResult = await input.sendWhatsapp({
+    baseUrl: input.baseUrl,
+    apiKey: input.apiKey,
+    sessionId: input.sessionId,
+    to: input.to,
+    text: input.text,
+  });
+
+  if (!sendResult.sent) {
+    console.error('[job] amortization-alert whatsapp_error', sendResult.reason, {
+      destination,
+    });
+    return { channel: 'whatsapp', destination, reason: 'error' };
+  }
+
+  try {
+    await input.deps.recordDelivery(input.targetDate, 'whatsapp', destination);
+  } catch (err) {
+    console.error('[job] amortization-alert: falha ao gravar delivery whatsapp', err);
+  }
+
+  console.log(
+    `[job] amortization-alert sent target=${input.targetDate} channel=whatsapp destination=${destination}`,
+  );
+  return { channel: 'whatsapp', destination, reason: 'sent' };
+}
+
+function summarizeChannelReasons(
+  channels: AmortizationAlertChannelResult[],
+): AmortizationAlertJobResult['reason'] {
+  const telegram = channels.find((c) => c.channel === 'telegram');
+  const whatsapp = channels.filter((c) => c.channel === 'whatsapp');
+
+  if (telegram?.reason === 'sent' || whatsapp.some((c) => c.reason === 'sent')) return 'ok';
+  if (telegram?.reason === 'already_sent' && whatsapp.every((c) => c.reason === 'already_sent')) {
+    return 'already_sent';
+  }
+  if (telegram?.reason === 'error') return 'telegram_error';
+  if (whatsapp.some((c) => c.reason === 'error')) return 'whatsapp_error';
+  if (telegram?.reason === 'skipped' && whatsapp.every((c) => c.reason === 'skipped')) {
+    return 'telegram_skipped';
+  }
+  if (telegram?.reason === 'skipped') return 'telegram_skipped';
+  if (whatsapp.length > 0 && whatsapp.every((c) => c.reason === 'skipped')) {
+    return 'whatsapp_skipped';
+  }
+  return 'ok';
+}
+
 /**
- * Alerta operacional: lista amortizações Sênior I de amanhã e notifica admin via Telegram.
- * Idempotente por (referenceDate, channel). Não derruba o daily em falhas.
+ * Alerta operacional: lista amortizações Sênior I de amanhã e notifica admin
+ * via Telegram e/ou WhatsApp (OpenWA). Canais independentes e idempotentes
+ * por (referenceDate, channel, destination). Não derruba o daily em falhas.
  */
 export async function runAmortizationAlertJob(opts?: {
   now?: Date;
@@ -150,8 +342,34 @@ export async function runAmortizationAlertJob(opts?: {
     chatId?: string;
     text: string;
   }) => Promise<SendTelegramResult>;
-  findDelivery?: (referenceDate: string) => Promise<boolean>;
-  recordDelivery?: (referenceDate: string) => Promise<void>;
+  openWaBaseUrl?: string;
+  openWaApiKey?: string;
+  openWaSessionId?: string;
+  openWaSessionName?: string;
+  whatsappTo?: string;
+  sendWhatsapp?: (input: {
+    baseUrl?: string;
+    apiKey?: string;
+    sessionId?: string;
+    to?: string;
+    text: string;
+  }) => Promise<SendWhatsappResult>;
+  resolveSessionId?: (input: {
+    baseUrl: string;
+    apiKey: string;
+    sessionId?: string | null;
+    sessionName?: string | null;
+  }) => Promise<string | null>;
+  findDelivery?: (
+    referenceDate: string,
+    channel: 'telegram' | 'whatsapp',
+    destination: string,
+  ) => Promise<boolean>;
+  recordDelivery?: (
+    referenceDate: string,
+    channel: 'telegram' | 'whatsapp',
+    destination: string,
+  ) => Promise<void>;
 }): Promise<AmortizationAlertJobResult> {
   const targetDate = tomorrowYYYYMMDD(opts?.now);
   const enabled = opts?.enabled ?? env.amortizationAlertEnabled;
@@ -164,8 +382,16 @@ export async function runAmortizationAlertJob(opts?: {
   const telegramBotToken = opts?.telegramBotToken ?? env.telegramBotToken;
   const telegramChatId = opts?.telegramChatId ?? env.amortizationAlertTelegramChatId;
   const sendTelegram = opts?.sendTelegram ?? sendTelegramMessage;
+  const openWaBaseUrl = opts?.openWaBaseUrl ?? env.openWaBaseUrl;
+  const openWaApiKey = opts?.openWaApiKey ?? env.openWaApiKey;
+  const openWaSessionId = opts?.openWaSessionId ?? env.openWaSessionId;
+  const openWaSessionName = opts?.openWaSessionName ?? env.openWaSessionName;
+  const whatsappToRaw = opts?.whatsappTo ?? env.amortizationAlertWhatsappTo;
+  const sendWhatsapp = opts?.sendWhatsapp ?? sendWhatsappMessage;
+  const resolveSessionId = opts?.resolveSessionId ?? resolveOpenWaSessionId;
   const findDelivery = opts?.findDelivery ?? defaultFindDelivery;
   const recordDelivery = opts?.recordDelivery ?? defaultRecordDelivery;
+  const deps: ChannelDeps = { findDelivery, recordDelivery };
 
   let links: AmortizationAlertLink[];
   try {
@@ -185,41 +411,73 @@ export async function runAmortizationAlertJob(opts?: {
     return { targetDate, count: 0, reason: 'ok' };
   }
 
-  if (!hasTelegramDestination(telegramBotToken, telegramChatId)) {
-    console.log('[job] amortization-alert telegram_skipped reason=missing_token_or_chat');
-    return { targetDate, count: eligible.length, reason: 'telegram_skipped' };
-  }
-
-  let alreadySent = false;
-  try {
-    alreadySent = await findDelivery(targetDate);
-  } catch (err) {
-    console.error('[job] amortization-alert: falha ao consultar delivery', err);
-  }
-
-  if (alreadySent) {
-    console.log(`[job] amortization-alert already_sent target=${targetDate} channel=telegram`);
-    return { targetDate, count: eligible.length, reason: 'already_sent' };
-  }
-
   const text = buildAmortizationAlertMessage(eligible, targetDate);
-  const sendResult = await sendTelegram({
-    token: telegramBotToken,
-    chatId: telegramChatId,
-    text,
-  });
-
-  if (!sendResult.sent) {
-    console.error('[job] amortization-alert telegram_error', sendResult.reason);
-    return { targetDate, count: eligible.length, reason: 'telegram_error' };
-  }
+  const channels: AmortizationAlertChannelResult[] = [];
 
   try {
-    await recordDelivery(targetDate);
+    channels.push(
+      await deliverTelegramChannel({
+        targetDate,
+        text,
+        telegramBotToken,
+        telegramChatId,
+        sendTelegram,
+        deps,
+      }),
+    );
   } catch (err) {
-    console.error('[job] amortization-alert: falha ao gravar delivery', err);
+    console.error('[job] amortization-alert: exceção telegram', err);
+    channels.push({ channel: 'telegram', destination: '', reason: 'error' });
   }
 
-  console.log(`[job] amortization-alert sent target=${targetDate} channel=telegram`);
-  return { targetDate, count: eligible.length, reason: 'ok' };
+  const destinations = parseWhatsappDestinations(whatsappToRaw);
+  let resolvedSessionId: string | null | undefined = openWaSessionId?.trim() || undefined;
+
+  if (destinations.length > 0 && openWaBaseUrl?.trim() && openWaApiKey?.trim()) {
+    if (!resolvedSessionId) {
+      try {
+        resolvedSessionId = await resolveSessionId({
+          baseUrl: openWaBaseUrl,
+          apiKey: openWaApiKey,
+          sessionId: openWaSessionId,
+          sessionName: openWaSessionName,
+        });
+      } catch (err) {
+        console.error('[job] amortization-alert: falha ao resolver sessão OpenWA', err);
+        resolvedSessionId = null;
+      }
+    }
+  }
+
+  if (destinations.length === 0) {
+    // nothing — WhatsApp not configured
+  } else if (!openWaBaseUrl?.trim() || !openWaApiKey?.trim() || !resolvedSessionId) {
+    console.log('[job] amortization-alert whatsapp_skipped reason=missing_openwa_or_session');
+    for (const to of destinations) {
+      channels.push({ channel: 'whatsapp', destination: to, reason: 'skipped' });
+    }
+  } else {
+    for (const to of destinations) {
+      try {
+        channels.push(
+          await deliverWhatsappChannel({
+            targetDate,
+            text,
+            to,
+            baseUrl: openWaBaseUrl,
+            apiKey: openWaApiKey,
+            sessionId: resolvedSessionId,
+            sendWhatsapp,
+            deps,
+          }),
+        );
+      } catch (err) {
+        console.error('[job] amortization-alert: exceção whatsapp', err);
+        channels.push({ channel: 'whatsapp', destination: to, reason: 'error' });
+      }
+    }
+  }
+
+  const reason = summarizeChannelReasons(channels);
+  return { targetDate, count: eligible.length, reason, channels };
 }

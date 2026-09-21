@@ -132,6 +132,7 @@ enum AmortizationKind {
 
 enum AmortizationAlertChannel {
   telegram
+  whatsapp
 
   @@map("amortization_alert_channel")
 }
@@ -819,10 +820,12 @@ model AmortizationAlertDelivery {
   id            String                          @id @default(uuid()) @db.Uuid
   referenceDate DateTime                        @map("reference_date") @db.Date
   channel       AmortizationAlertChannel
+  /** Telegram: ''; WhatsApp: E.164 normalizado (ex. 5511...). */
+  destination   String                          @default("") @db.Text
   status        AmortizationAlertDeliveryStatus @default(sent)
   createdAt     DateTime                        @default(now()) @map("created_at") @db.Timestamptz
 
-  @@unique([referenceDate, channel])
+  @@unique([referenceDate, channel, destination])
   @@map("amortization_alert_deliveries")
 }
 
