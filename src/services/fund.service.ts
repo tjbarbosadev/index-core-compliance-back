@@ -205,6 +205,99 @@ export async function listFunds(filters?: { status?: FundStatus; modality?: Fund
   );
 }
 
+export type PartnerQuotaClass = {
+  name: string;
+  targetYield?: string;
+  termMonths?: number;
+  amortization?: string;
+  liquidity?: string;
+  risk?: string;
+};
+
+export type PartnerFund = {
+  id: string;
+  name: string;
+  legalName?: string;
+  modality: FundModality;
+  status: FundStatus;
+  website?: string;
+  description?: string;
+  targetAudience?: string;
+  inceptionDate?: string;
+  quotaClasses: PartnerQuotaClass[];
+};
+
+/** Public partner catalog — no CNPJ, PL, bank, contacts, or shareholders. */
+export function toPartnerFund(fund: {
+  id: string;
+  name: string;
+  legalName?: string | null;
+  modality: FundModality;
+  status: FundStatus;
+  website?: string | null;
+  description?: string | null;
+  targetAudience?: string | null;
+  inceptionDate?: string | Date | null;
+  extraInfoJson?: FundExtraInfo | null;
+}): PartnerFund {
+  const extra = fund.extraInfoJson ?? {};
+  const rawClasses = Array.isArray(extra.quotaClasses) ? extra.quotaClasses : [];
+  const quotaClasses: PartnerQuotaClass[] = rawClasses
+    .filter((c): c is NonNullable<typeof c> => Boolean(c?.name))
+    .map((c) => ({
+      name: c.name,
+      ...(c.targetYield ? { targetYield: c.targetYield } : {}),
+      ...(c.termMonths != null ? { termMonths: c.termMonths } : {}),
+      ...(c.amortization ? { amortization: c.amortization } : {}),
+      ...(c.liquidity ? { liquidity: c.liquidity } : {}),
+      ...(c.risk ? { risk: c.risk } : {}),
+    }));
+
+  let inceptionDate: string | undefined;
+  if (fund.inceptionDate instanceof Date) {
+    inceptionDate = fund.inceptionDate.toISOString().slice(0, 10);
+  } else if (typeof fund.inceptionDate === 'string' && fund.inceptionDate.length > 0) {
+    inceptionDate = fund.inceptionDate.slice(0, 10);
+  }
+
+  return {
+    id: fund.id,
+    name: fund.name,
+    ...(fund.legalName ? { legalName: fund.legalName } : {}),
+    modality: fund.modality,
+    status: fund.status,
+    ...(fund.website ? { website: fund.website } : {}),
+    ...(fund.description ? { description: fund.description } : {}),
+    ...(fund.targetAudience ? { targetAudience: fund.targetAudience } : {}),
+    ...(inceptionDate ? { inceptionDate } : {}),
+    quotaClasses,
+  };
+}
+
+export async function listPartnerFunds(): Promise<PartnerFund[]> {
+  const funds = await prisma.fund.findMany({
+    where: { status: 'ativo' },
+    orderBy: { name: 'asc' },
+  });
+  return funds.map((f) =>
+    toPartnerFund({
+      ...f,
+      extraInfoJson: (f.extraInfoJson as FundExtraInfo) ?? {},
+    }),
+  );
+}
+
+export async function getPartnerFundById(id: string): Promise<PartnerFund | null> {
+  const fund = await prisma.fund.findFirst({
+    where: { id, status: 'ativo' },
+  });
+  if (!fund) return null;
+  return toPartnerFund({
+    ...fund,
+    extraInfoJson: (fund.extraInfoJson as FundExtraInfo) ?? {},
+  });
+}
+
 export async function getFundById(id: string) {
   const fund = await prisma.fund.findUnique({
     where: { id },

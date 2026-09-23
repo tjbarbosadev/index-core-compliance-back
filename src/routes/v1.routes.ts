@@ -6,6 +6,7 @@ import {
   type AuthenticatedPartner,
 } from '../services/partner.service.js';
 import * as cotistaService from '../services/cotista.service.js';
+import * as fundService from '../services/fund.service.js';
 import { getVisualizationDate, toYYYYMMDD } from '../services/quota-calculator.js';
 
 type PartnerRequest = Request & { partner?: AuthenticatedPartner };
@@ -123,6 +124,30 @@ function positionIdQuery(req: Request): string | undefined {
 }
 
 export function registerV1Routes(app: Express) {
+  app.get('/v1/fundos', requirePartner, logPartnerAccess, async (_req, res) => {
+    try {
+      const funds = await fundService.listPartnerFunds();
+      res.json({ funds });
+    } catch (err) {
+      console.error('[v1/fundos]', err);
+      res.status(500).json({ error: 'Erro ao listar fundos' });
+    }
+  });
+
+  app.get('/v1/fundos/:id', requirePartner, logPartnerAccess, async (req, res) => {
+    try {
+      const fund = await fundService.getPartnerFundById(req.params.id);
+      if (!fund) {
+        res.status(404).json({ error: 'Fundo não encontrado' });
+        return;
+      }
+      res.json(fund);
+    } catch (err) {
+      console.error('[v1/fundos/:id]', err);
+      res.status(500).json({ error: 'Erro ao obter fundo' });
+    }
+  });
+
   app.get('/v1/cotistas', requirePartner, logPartnerAccess, async (_req, res) => {
     try {
       const list = await cotistaService.listCotistas(['cotistas.view_kyc'], true);
