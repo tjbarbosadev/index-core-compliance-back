@@ -215,6 +215,14 @@ const MENU_ITEMS = [
     perm: 'audit.read',
   },
   {
+    key: 'menu-api',
+    label: 'API',
+    route: '/admin/api',
+    icon: 'book-open',
+    sortOrder: 112,
+    perm: 'admin.manage_access',
+  },
+  {
     key: 'menu-admin',
     label: 'Administração',
     route: '/admin',
