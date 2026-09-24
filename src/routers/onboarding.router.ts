@@ -71,6 +71,12 @@ export const onboardingRouter = router({
     .mutation(({ input, ctx }) =>
       onboardingService.rejectOnboarding(input.id, 'cotista', input.reason, ctx.user.id, ctx.ip),
     ),
+
+  delete: permissionProcedure('onboarding.approve')
+    .input(z.object({ id: z.string().uuid() }))
+    .mutation(({ input, ctx }) =>
+      onboardingService.softDeleteOnboarding(input.id, 'cotista', ctx.user.id, ctx.ip),
+    ),
 });
 
 export const cedenteOnboardingRouter = router({
@@ -123,5 +129,11 @@ export const cedenteOnboardingRouter = router({
     .input(z.object({ id: z.string().uuid(), reason: z.string().min(1) }))
     .mutation(({ input, ctx }) =>
       onboardingService.rejectOnboarding(input.id, 'cedente', input.reason, ctx.user.id, ctx.ip),
+    ),
+
+  delete: permissionProcedure('cedentes.approve')
+    .input(z.object({ id: z.string().uuid() }))
+    .mutation(({ input, ctx }) =>
+      onboardingService.softDeleteOnboarding(input.id, 'cedente', ctx.user.id, ctx.ip),
     ),
 });

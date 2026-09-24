@@ -1,10 +1,13 @@
 import type { OnboardingKind, PartyType, Prisma, QuotaType } from '@prisma/client';
 import { prisma } from '../db/index.js';
 import { APP_ERROR } from '../lib/errors.js';
+import { digitsOnly, findActivePartyByCpfCnpj } from '../lib/party.js';
 import { logAudit } from './audit.service.js';
 import { mapCotistaFull } from './cotista.service.js';
 
 type StepData = Record<string, unknown>;
+
+export type SiteProposalSource = 'nexafidic' | 'nextcorefim';
 
 export function buildSteps(currentStep: number) {
   return Array.from({ length: 6 }, (_, i) => {
@@ -23,7 +26,7 @@ export function buildSteps(currentStep: number) {
 
 async function loadProcess(id: string, kind: OnboardingKind) {
   const process = await prisma.onboardingProcess.findFirst({
-    where: { id, kind },
+    where: { id, kind, party: { deletedAt: null } },
     include: {
       party: { include: { contacts: true } },
       fund: true,
@@ -39,6 +42,8 @@ async function loadProcess(id: string, kind: OnboardingKind) {
   });
 
   const stepData = (process.stepDataJson as StepData) ?? {};
+  const primary =
+    process.party.contacts.find((c) => c.isPrimary) ?? process.party.contacts[0] ?? null;
 
   return {
     id: process.id,
@@ -47,11 +52,28 @@ async function loadProcess(id: string, kind: OnboardingKind) {
     partyType: process.party.type,
     cpfCnpj: process.party.cpfCnpj,
     legalName: process.party.legalName,
+    email: primary?.email ?? undefined,
+    phone: primary?.phone ?? undefined,
     fundId: process.fundId,
     fundName: process.fund.name,
+    fundModality: process.fund.modality,
     quotaType: process.quotaType ?? undefined,
     currentStep: process.currentStep,
     status: process.status,
+    partyStatus: process.party.status,
+    fimApplicationId: process.party.fimApplicationId ?? undefined,
+    source: (typeof stepData.source === 'string' ? stepData.source : undefined) as
+      | SiteProposalSource
+      | undefined,
+    externalApplicationId:
+      typeof stepData.externalApplicationId === 'string'
+        ? stepData.externalApplicationId
+        : undefined,
+    sitePayload:
+      stepData.sitePayload && typeof stepData.sitePayload === 'object'
+        ? (stepData.sitePayload as Record<string, unknown>)
+        : undefined,
+    ingestedAt: typeof stepData.ingestedAt === 'string' ? stepData.ingestedAt : undefined,
     startedAt: process.startedAt.toISOString(),
     expiresAt: process.expiresAt?.toISOString(),
     steps:
@@ -79,7 +101,7 @@ async function loadProcess(id: string, kind: OnboardingKind) {
 
 export async function listOnboardingProcesses(kind: OnboardingKind) {
   const items = await prisma.onboardingProcess.findMany({
-    where: { kind },
+    where: { kind, party: { deletedAt: null } },
     include: { party: true, fund: true },
     orderBy: { startedAt: 'desc' },
   });
@@ -101,9 +123,15 @@ export async function createOnboarding(input: {
   kind?: OnboardingKind;
 }) {
   const kind = input.kind ?? 'cotista';
-  const existing = await prisma.party.findUnique({ where: { cpfCnpj: input.cpfCnpj } });
+  const digits = digitsOnly(input.cpfCnpj);
+  const existing = await findActivePartyByCpfCnpj(digits);
   if (existing?.status === 'aprovado') {
     throw APP_ERROR.CONFLICT('CPF/CNPJ já cadastrado como aprovado');
+  }
+  if (existing?.status === 'rejeitado') {
+    throw APP_ERROR.CONFLICT(
+      'CPF/CNPJ com cadastro recusado — exclua o onboarding para permitir novo cadastro',
+    );
   }
 
   const expiresAt = new Date();
@@ -114,7 +142,7 @@ export async function createOnboarding(input: {
     (await prisma.party.create({
       data: {
         type: input.partyType,
-        cpfCnpj: input.cpfCnpj,
+        cpfCnpj: digits,
         legalName: input.legalName,
         status: 'pendente',
       },
@@ -512,9 +540,20 @@ export async function rejectOnboarding(
   userId: string,
   ip?: string,
 ) {
-  await prisma.onboardingProcess.update({
-    where: { id },
-    data: { status: 'rejeitado', completedAt: new Date() },
+  const process = await prisma.onboardingProcess.findFirst({
+    where: { id, kind, party: { deletedAt: null } },
+  });
+  if (!process) throw APP_ERROR.NOT_FOUND('Onboarding');
+
+  await prisma.$transaction(async (tx) => {
+    await tx.onboardingProcess.update({
+      where: { id },
+      data: { status: 'rejeitado', completedAt: new Date() },
+    });
+    await tx.party.update({
+      where: { id: process.partyId },
+      data: { status: 'rejeitado' },
+    });
   });
 
   await logAudit({
@@ -529,13 +568,227 @@ export async function rejectOnboarding(
   return loadProcess(id, kind);
 }
 
+/**
+ * Soft delete (LGPD): anonymize PII, set deletedAt so CPF/CNPJ can be registered again.
+ */
+export async function softDeleteOnboarding(
+  id: string,
+  kind: OnboardingKind,
+  userId: string,
+  ip?: string,
+) {
+  const process = await prisma.onboardingProcess.findFirst({
+    where: { id, kind, party: { deletedAt: null } },
+    include: { party: true },
+  });
+  if (!process) throw APP_ERROR.NOT_FOUND('Onboarding');
+
+  const stepData = (process.stepDataJson as StepData) ?? {};
+  const scrubbed: StepData = {
+    source: stepData.source,
+    ingestedAt: stepData.ingestedAt,
+    externalApplicationId: stepData.externalApplicationId,
+    anonymizedAt: new Date().toISOString(),
+  };
+
+  await prisma.$transaction(async (tx) => {
+    await tx.partyContact.deleteMany({ where: { partyId: process.partyId } });
+    await tx.partyBeneficialOwner.deleteMany({ where: { partyId: process.partyId } });
+    await tx.onboardingProcess.update({
+      where: { id },
+      data: {
+        status: 'rejeitado',
+        completedAt: new Date(),
+        stepDataJson: scrubbed as Prisma.InputJsonValue,
+      },
+    });
+    await tx.party.update({
+      where: { id: process.partyId },
+      data: {
+        status: 'excluido',
+        legalName: 'Titular excluído',
+        fimApplicationId: null,
+        deletedAt: new Date(),
+        deletedById: userId,
+        pepFlag: false,
+      },
+    });
+  });
+
+  await logAudit({
+    userId,
+    action: 'onboarding.delete',
+    entityType: 'onboarding_process',
+    entityId: id,
+    details: { partyId: process.partyId, kind },
+    ipAddress: ip,
+  });
+
+  return { success: true as const };
+}
+
+export type IngestSiteProposalInput = {
+  source: SiteProposalSource;
+  partyType: PartyType;
+  cpfCnpj: string;
+  legalName: string;
+  email?: string;
+  phone?: string;
+  fundCnpj: string;
+  quotaType?: QuotaType;
+  externalApplicationId?: string;
+  payload?: Record<string, unknown>;
+  suitability?: Record<string, unknown>;
+};
+
+/**
+ * Creates or updates an in-progress cotista onboarding from a public site submission.
+ */
+export async function ingestSiteProposal(input: IngestSiteProposalInput) {
+  const digits = digitsOnly(input.cpfCnpj);
+  if (digits.length < 11) throw APP_ERROR.BAD_REQUEST('CPF/CNPJ inválido');
+
+  const fundDigits = digitsOnly(input.fundCnpj);
+  const fund = await prisma.fund.findFirst({
+    where: {
+      OR: [{ cnpj: fundDigits }, { cnpj: input.fundCnpj }],
+      status: 'ativo',
+    },
+  });
+  if (!fund) throw APP_ERROR.NOT_FOUND('Fundo');
+
+  const existingParty = await findActivePartyByCpfCnpj(digits);
+  if (existingParty?.status === 'aprovado') {
+    throw APP_ERROR.CONFLICT('CPF/CNPJ já cadastrado como aprovado');
+  }
+
+  const ingestedAt = new Date().toISOString();
+  const stepPatch: StepData = {
+    source: input.source,
+    externalApplicationId: input.externalApplicationId,
+    sitePayload: input.payload ?? {},
+    ingestedAt,
+    ...(input.suitability ? { suitabilityAnswers: input.suitability } : {}),
+  };
+
+  const openProcess = existingParty
+    ? await prisma.onboardingProcess.findFirst({
+        where: {
+          kind: 'cotista',
+          partyId: existingParty.id,
+          fundId: fund.id,
+          status: 'em_andamento',
+        },
+        orderBy: { startedAt: 'desc' },
+      })
+    : null;
+
+  if (openProcess && existingParty) {
+    const party = existingParty;
+    const prev = (openProcess.stepDataJson as StepData) ?? {};
+    await prisma.onboardingProcess.update({
+      where: { id: openProcess.id },
+      data: {
+        stepDataJson: { ...prev, ...stepPatch } as Prisma.InputJsonValue,
+        ...(input.quotaType ? { quotaType: input.quotaType } : {}),
+      },
+    });
+
+    await upsertPartyContact(party.id, input.email, input.phone);
+    if (input.externalApplicationId) {
+      await prisma.party.update({
+        where: { id: party.id },
+        data: {
+          legalName: input.legalName.trim() || party.legalName,
+          fimApplicationId: input.externalApplicationId,
+        },
+      });
+    } else if (input.legalName.trim()) {
+      await prisma.party.update({
+        where: { id: party.id },
+        data: { legalName: input.legalName.trim() },
+      });
+    }
+
+    await logAudit({
+      action: 'onboarding.ingest_site',
+      entityType: 'onboarding_process',
+      entityId: openProcess.id,
+      details: { source: input.source, updated: true, fundId: fund.id },
+    });
+
+    const loaded = await loadProcess(openProcess.id, 'cotista');
+    return { process: loaded, created: false as const };
+  }
+
+  const created = await createOnboarding({
+    partyType: input.partyType,
+    cpfCnpj: digits,
+    legalName: input.legalName.trim(),
+    fundId: fund.id,
+    quotaType: input.quotaType ?? (fund.modality === 'fim' ? 'unica' : 'senior_i'),
+    kind: 'cotista',
+  });
+  if (!created) throw APP_ERROR.BAD_REQUEST('Falha ao criar onboarding');
+
+  await prisma.onboardingProcess.update({
+    where: { id: created.id },
+    data: { stepDataJson: stepPatch as Prisma.InputJsonValue },
+  });
+
+  await upsertPartyContact(created.partyId, input.email, input.phone);
+  if (input.externalApplicationId) {
+    await prisma.party.update({
+      where: { id: created.partyId },
+      data: { fimApplicationId: input.externalApplicationId },
+    });
+  }
+
+  await logAudit({
+    action: 'onboarding.ingest_site',
+    entityType: 'onboarding_process',
+    entityId: created.id,
+    details: { source: input.source, updated: false, fundId: fund.id },
+  });
+
+  const loaded = await loadProcess(created.id, 'cotista');
+  return { process: loaded, created: true as const };
+}
+
+async function upsertPartyContact(partyId: string, email?: string, phone?: string) {
+  if (!email && !phone) return;
+  const existing = await prisma.partyContact.findFirst({
+    where: { partyId, isPrimary: true },
+  });
+  if (existing) {
+    await prisma.partyContact.update({
+      where: { id: existing.id },
+      data: {
+        email: email?.trim() || existing.email,
+        phone: phone?.trim() || existing.phone,
+      },
+    });
+    return;
+  }
+  await prisma.partyContact.create({
+    data: {
+      partyId,
+      email: email?.trim() || null,
+      phone: phone?.trim() || null,
+      isPrimary: true,
+    },
+  });
+}
+
 export async function advanceFromWebPayload(
   id: string,
   kind: OnboardingKind,
   payload: Record<string, unknown>,
   userId?: string,
 ) {
-  const current = await prisma.onboardingProcess.findFirst({ where: { id, kind } });
+  const current = await prisma.onboardingProcess.findFirst({
+    where: { id, kind, party: { deletedAt: null } },
+  });
   if (!current) throw APP_ERROR.NOT_FOUND('Onboarding');
 
   const payloadStep =

@@ -101,4 +101,6 @@ export const env = {
     '',
   ),
   nextcorefimApiServiceKey: process.env.NEXTCOREFIM_API_SERVICE_KEY?.trim() || '',
+  /** Ingest de propostas dos sites FIDC/FIM — key vazia: POST /internal/proposals retorna 503. */
+  proposalIngestServiceKey: process.env.PROPOSAL_INGEST_SERVICE_KEY?.trim() || '',
 };

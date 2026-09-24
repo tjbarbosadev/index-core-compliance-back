@@ -31,6 +31,7 @@ enum PartyStatus {
   rejeitado
   expirado
   revalidado
+  excluido
 
   @@map("party_status")
 }
@@ -351,7 +352,8 @@ model UserPermissionOverride {
 model Party {
   id               String      @id @default(uuid()) @db.Uuid
   type             PartyType
-  cpfCnpj          String      @unique @map("cpf_cnpj") @db.VarChar(18)
+  /** Unique only while deletedAt IS NULL (partial index in migration — LGPD soft delete). */
+  cpfCnpj          String      @map("cpf_cnpj") @db.VarChar(18)
   legalName        String      @map("legal_name") @db.VarChar(500)
   status           PartyStatus @default(pendente)
   riskLevel        RiskLevel   @default(baixo) @map("risk_level")
@@ -359,6 +361,9 @@ model Party {
   approvedAt       DateTime?   @map("approved_at") @db.Timestamptz
   approvedBy       String?     @map("approved_by") @db.Uuid
   expiresAt        DateTime?   @map("expires_at") @db.Timestamptz
+  /** Soft delete (LGPD) — listagens e unique ativo ignoram deletedAt != null */
+  deletedAt        DateTime?   @map("deleted_at") @db.Timestamptz
+  deletedById      String?     @map("deleted_by_id") @db.Uuid
   /** nextcorefim Application.id — shared Mega folder for FIM KYC docs */
   fimApplicationId String?     @unique @map("fim_application_id") @db.VarChar(36)
   createdAt        DateTime    @default(now()) @map("created_at") @db.Timestamptz
@@ -375,6 +380,8 @@ model Party {
   kycReports         KycReport[]
 
   @@index([status, expiresAt])
+  @@index([cpfCnpj])
+  @@index([deletedAt])
   @@map("parties")
 }
 

@@ -1,5 +1,6 @@
 import { prisma } from '../db/index.js';
 import { APP_ERROR } from '../lib/errors.js';
+import { digitsOnly, findActivePartyByCpfCnpj } from '../lib/party.js';
 import { hasPermissionInList } from './permission.service.js';
 import { logAudit } from './audit.service.js';
 import { getVisualizationDate, parseYYYYMMDD, toYYYYMMDD } from './quota-calculator.js';
@@ -246,7 +247,12 @@ export async function listCotistas(permissions: string[], isAdmin: boolean, stat
   }
 
   const cotistas = await prisma.cotista.findMany({
-    where: status && status !== 'all' ? { party: { status: status as 'aprovado' } } : undefined,
+    where: {
+      party: {
+        deletedAt: null,
+        ...(status && status !== 'all' ? { status: status as 'aprovado' } : {}),
+      },
+    },
     include: {
       party: {
         include: {
@@ -475,7 +481,7 @@ export type CotistaWriteInput = {
 };
 
 function normalizeDocument(cpfCnpj: string): string {
-  return cpfCnpj.replace(/\D/g, '');
+  return digitsOnly(cpfCnpj);
 }
 
 function partyTypeFromDocument(digits: string): 'pf' | 'pj' {
@@ -537,7 +543,7 @@ export async function createCotista(input: CotistaWriteInput, userId: string, ip
     if (!fund) throw APP_ERROR.NOT_FOUND('Fundo');
   }
 
-  const existing = await prisma.party.findUnique({ where: { cpfCnpj: digits } });
+  const existing = await findActivePartyByCpfCnpj(digits);
   if (existing) throw APP_ERROR.CONFLICT('Já existe cadastro com este CPF/CNPJ');
 
   const createdId = await prisma.$transaction(async (tx) => {
@@ -632,7 +638,7 @@ export async function updateCotista(
   }
 
   if (digits !== cotista.party.cpfCnpj) {
-    const clash = await prisma.party.findUnique({ where: { cpfCnpj: digits } });
+    const clash = await findActivePartyByCpfCnpj(digits);
     if (clash) throw APP_ERROR.CONFLICT('Já existe cadastro com este CPF/CNPJ');
   }
 

@@ -28,6 +28,7 @@
     "seed:fim-cotista": "NODE_ENV=development tsx scripts/seed-fim-cotista.ts",
     "fixtures:docs": "NODE_ENV=development tsx scripts/generate-doc-fixtures.ts",
     "smoke:docs": "NODE_ENV=development tsx scripts/smoke-document-uploads.ts",
+    "smoke:proposals": "NODE_ENV=development tsx scripts/smoke-site-proposal-ingest.ts",
     "partner:create": "NODE_ENV=development tsx prisma/partner-cli.ts create",
     "partner:rotate": "NODE_ENV=development tsx prisma/partner-cli.ts rotate",
     "partner:list": "NODE_ENV=development tsx prisma/partner-cli.ts list",

@@ -10,6 +10,7 @@ import { registerAuthRoutes } from './routes/auth.routes.js';
 import { registerFilesRoutes } from './routes/files.routes.js';
 import { registerV1Routes } from './routes/v1.routes.js';
 import { registerPartnerAdminRoutes } from './routes/partner-admin.routes.js';
+import { registerInternalRoutes } from './routes/internal.routes.js';
 import { registerScheduledJobs } from './lib/scheduler.js';
 
 const app = express();
@@ -24,7 +25,7 @@ app.use(
       }
       callback(null, false);
     },
-    allowedHeaders: ['Authorization', 'Content-Type'],
+    allowedHeaders: ['Authorization', 'Content-Type', 'X-API-Key'],
     credentials: true,
   }),
 );
@@ -32,11 +33,12 @@ app.use(cookieParser());
 
 registerFilesRoutes(app);
 
-app.use(express.json());
+app.use(express.json({ limit: '2mb' }));
 
 registerAuthRoutes(app);
 registerV1Routes(app);
 registerPartnerAdminRoutes(app);
+registerInternalRoutes(app);
 
 app.use(
   '/trpc',

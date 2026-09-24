@@ -512,6 +512,37 @@ async function main() {
   const cotistasCount = await seedCotistasFromDataJson(fund.id);
   console.log(`Seed cotistas OK: ${cotistasCount} cliente(s) de prisma/data/clients.json`);
 
+  const NEXT_CORE_FIM_CNPJ = '67897391000160';
+  const fimFundData = {
+    name: 'NEXT CORE II FIM',
+    legalName: 'NEXT CORE II FUNDO DE INVESTIMENTO MULTIMERCADO',
+    cnpj: NEXT_CORE_FIM_CNPJ,
+    modality: 'fim' as const,
+    status: 'ativo' as const,
+    targetAudience: 'Investidores qualificados',
+    inceptionDate: new Date('2025-01-01'),
+    website: 'https://nextcorefim.com.br',
+    registeredAddress: 'Alameda Grajaú, 614, Sala 904, Alphaville, Barueri/SP, CEP 06454-050',
+    description: 'Fundo multimercado NEXT CORE II FIM.',
+    contactEmail: 'contato@nextcorefim.com.br',
+    regulatoryLimitsJson: {},
+    extraInfoJson: {
+      regulator: 'CVM',
+      quotaClasses: [{ name: 'Cota Única', risk: 'Moderado' }],
+    },
+  };
+  const existingFim =
+    (await prisma.fund.findUnique({ where: { cnpj: NEXT_CORE_FIM_CNPJ } })) ??
+    (await prisma.fund.findFirst({
+      where: { modality: 'fim', name: { contains: 'NEXT CORE II' } },
+    }));
+  if (existingFim) {
+    await prisma.fund.update({ where: { id: existingFim.id }, data: fimFundData });
+  } else {
+    await prisma.fund.create({ data: fimFundData });
+  }
+  console.log('Seed fundo NEXT CORE II FIM OK');
+
   console.log('Seed base OK — iniciando backfill de rendimentos (BCB)...');
   try {
     const n = await backfillAllActiveYields();
