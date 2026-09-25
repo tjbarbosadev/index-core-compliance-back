@@ -153,6 +153,64 @@ export async function sendUserInviteEmail(input: {
   return result;
 }
 
+export function maskCpfCnpj(digits: string): string {
+  if (digits.length <= 5) return '***';
+  return `${digits.slice(0, 3)}${'*'.repeat(digits.length - 5)}${digits.slice(-2)}`;
+}
+
+export async function sendSiteProposalEmail(input: {
+  recipients: string[];
+  siteLabel: string;
+  partyType: 'pf' | 'pj';
+  legalName: string;
+  cpfCnpj: string;
+  email?: string;
+  phone?: string;
+  onboardingUrl: string;
+  created: boolean;
+}): Promise<SendEmailResult[]> {
+  if (input.recipients.length === 0) {
+    console.warn('[email] SITE_PROPOSAL_NOTIFY_EMAILS vazio — aviso de proposta não enviado', {
+      onboardingUrl: input.onboardingUrl,
+    });
+    return [];
+  }
+
+  const tipo = input.partyType === 'pj' ? 'Pessoa Jurídica' : 'Pessoa Física';
+  const subject = `${input.created ? 'Nova proposta' : 'Proposta atualizada'} — ${input.siteLabel} — ${input.legalName}`;
+  const rows: Array<[string, string]> = [
+    ['Origem', input.siteLabel],
+    ['Tipo', tipo],
+    ['Nome / Razão social', input.legalName],
+    [input.partyType === 'pj' ? 'CNPJ' : 'CPF', maskCpfCnpj(input.cpfCnpj)],
+    ['E-mail', input.email ?? '—'],
+    ['Telefone', input.phone ?? '—'],
+  ];
+
+  const text = [
+    `${input.created ? 'Nova proposta recebida' : 'Proposta reenviada'} pelo site (${input.siteLabel}).`,
+    '',
+    ...rows.map(([k, v]) => `${k}: ${v}`),
+    '',
+    `Analisar no OpCore: ${input.onboardingUrl}`,
+  ].join('\n');
+
+  const html = `
+    <p>${input.created ? 'Nova proposta recebida' : 'Proposta reenviada'} pelo site (${escapeHtml(input.siteLabel)}).</p>
+    <table cellpadding="4" style="border-collapse:collapse">
+      ${rows
+        .map(
+          ([k, v]) =>
+            `<tr><td><strong>${escapeHtml(k)}</strong></td><td>${escapeHtml(v)}</td></tr>`,
+        )
+        .join('')}
+    </table>
+    <p><a href="${escapeHtml(input.onboardingUrl)}">Analisar no OpCore</a></p>
+  `;
+
+  return Promise.all(input.recipients.map((to) => sendResendEmail({ to, subject, text, html })));
+}
+
 function logDebugUrlIfNeeded(result: SendEmailResult, url: string) {
   if (result.sent) return;
   if (env.nodeEnv === 'production' && !env.emailDebug) return;

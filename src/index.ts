@@ -11,6 +11,7 @@ import { registerFilesRoutes } from './routes/files.routes.js';
 import { registerV1Routes } from './routes/v1.routes.js';
 import { registerPartnerAdminRoutes } from './routes/partner-admin.routes.js';
 import { registerInternalRoutes } from './routes/internal.routes.js';
+import { registerPublicSitesRoutes } from './routes/public-sites.routes.js';
 import { registerScheduledJobs } from './lib/scheduler.js';
 
 const app = express();
@@ -39,6 +40,7 @@ registerAuthRoutes(app);
 registerV1Routes(app);
 registerPartnerAdminRoutes(app);
 registerInternalRoutes(app);
+registerPublicSitesRoutes(app);
 
 app.use(
   '/trpc',
