@@ -23,6 +23,10 @@ export const KYC_DOCUMENT_TYPES = new Set([
   'contrato_social',
   'balanco_patrimonial',
   'minuta_cessao',
+  'identidade_representante',
+  'comprovante_endereco_representante',
+  'ficha_cadastral_pj',
+  'cartao_assinatura',
 ]);
 
 export const DEFAULT_REGULATORY_LIMITS: Record<string, Record<string, number>> = {

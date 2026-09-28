@@ -59,6 +59,15 @@ enum DocumentType {
   balanco_patrimonial
   minuta_cessao
   outro
+  comprovante_endereco_empresa
+  identidade_representante
+  comprovante_endereco_representante
+  ficha_cadastral_pj
+  cartao_assinatura
+  dre
+  declaracao_faturamento
+  certidao
+  parecer_juridico
 
   @@map("document_type")
 }
@@ -180,6 +189,35 @@ enum OnboardingKind {
   @@map("onboarding_kind")
 }
 
+enum CedenteStage {
+  rascunho
+  aguardando_assinatura
+  em_analise_juridica
+  pendencia_juridica
+  em_analise_compliance
+  aprovado
+  rejeitado
+
+  @@map("cedente_stage")
+}
+
+enum LegalReviewDecision {
+  favoravel
+  pendencia
+  desfavoravel
+
+  @@map("legal_review_decision")
+}
+
+enum SignatureEnvelopeStatus {
+  pendente
+  assinado
+  recusado
+  cancelado
+
+  @@map("signature_envelope_status")
+}
+
 enum StepStatus {
   pendente
   em_andamento
@@ -263,6 +301,7 @@ model User {
   documentsValidated  Document[]               @relation("DocumentValidator")
   kycReports          KycReport[]
   whatsappSession     WhatsappSession?
+  legalReviews        LegalReview[]
 
   @@map("users")
 }
@@ -614,6 +653,8 @@ model Document {
   id              String         @id @default(uuid()) @db.Uuid
   partyId         String         @map("party_id") @db.Uuid
   type            DocumentType
+  /** Cedente catalog slot (ex.: contrato-social, socio-0-identidade). */
+  slot            String?        @db.VarChar(100)
   fileName        String         @default("") @map("file_name") @db.VarChar(255)
   fileUri         String         @map("file_uri")
   hashSha256      String         @default("") @map("hash_sha256") @db.VarChar(64)
@@ -632,6 +673,7 @@ model Document {
   validations DocumentValidation[]
 
   @@index([partyId])
+  @@index([partyId, slot])
   @@index([status])
   @@map("documents")
 }
@@ -662,6 +704,7 @@ model OnboardingProcess {
   quotaType   QuotaType?       @map("quota_type")
   currentStep Int              @default(1) @map("current_step") @db.SmallInt
   status      OnboardingStatus @default(em_andamento)
+  cedenteStage CedenteStage?   @map("cedente_stage")
   stepDataJson Json?           @default("{}") @map("step_data_json")
   approvalJustification String? @map("approval_justification") @db.Text
   approvedById String?         @map("approved_by_id") @db.Uuid
@@ -674,10 +717,51 @@ model OnboardingProcess {
   steps               OnboardingStep[]
   suitabilityResponse SuitabilityResponse?
   kycReports          KycReport[]
+  signatureEnvelopes  SignatureEnvelope[]
+  legalReviews        LegalReview[]
 
   @@index([status])
   @@index([kind, status])
+  @@index([kind, cedenteStage])
   @@map("onboarding_processes")
+}
+
+model SignatureEnvelope {
+  id            String                  @id @default(uuid()) @db.Uuid
+  onboardingId  String                  @map("onboarding_id") @db.Uuid
+  provider      String                  @default("zapsign") @db.VarChar(30)
+  /** ZapSign doc token (one envelope per generated PDF). */
+  externalToken String                  @unique @map("external_token") @db.VarChar(100)
+  documentId    String?                 @map("document_id") @db.Uuid
+  status        SignatureEnvelopeStatus @default(pendente)
+  sandbox       Boolean                 @default(false)
+  signersJson   Json                    @default("[]") @map("signers_json")
+  signedAt      DateTime?               @map("signed_at") @db.Timestamptz
+  createdAt     DateTime                @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt     DateTime                @updatedAt @map("updated_at") @db.Timestamptz
+
+  onboarding OnboardingProcess @relation(fields: [onboardingId], references: [id], onDelete: Cascade)
+
+  @@index([onboardingId])
+  @@map("signature_envelopes")
+}
+
+model LegalReview {
+  id               String              @id @default(uuid()) @db.Uuid
+  onboardingId     String              @map("onboarding_id") @db.Uuid
+  reviewerId       String              @map("reviewer_id") @db.Uuid
+  decision         LegalReviewDecision
+  opinion          String              @db.Text
+  pendingItemsJson Json                @default("[]") @map("pending_items_json")
+  documentId       String?             @map("document_id") @db.Uuid
+  createdAt        DateTime            @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt        DateTime            @updatedAt @map("updated_at") @db.Timestamptz
+
+  onboarding OnboardingProcess @relation(fields: [onboardingId], references: [id], onDelete: Cascade)
+  reviewer   User              @relation(fields: [reviewerId], references: [id], onDelete: Restrict)
+
+  @@index([onboardingId, createdAt])
+  @@map("legal_reviews")
 }
 
 model OnboardingStep {

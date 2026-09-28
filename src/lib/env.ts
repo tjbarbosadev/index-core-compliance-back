@@ -103,6 +103,27 @@ export const env = {
   nextcorefimApiServiceKey: process.env.NEXTCOREFIM_API_SERVICE_KEY?.trim() || '',
   /** Ingest de propostas dos sites FIDC/FIM — key vazia: POST /internal/proposals retorna 503. */
   proposalIngestServiceKey: process.env.PROPOSAL_INGEST_SERVICE_KEY?.trim() || '',
+  /** E-mail oficial da Ipebank: contato nos envelopes ZapSign e avisos do onboarding de cedentes. */
+  ipebankOfficialEmail: process.env.IPEBANK_OFFICIAL_EMAIL?.trim() || undefined,
+  /** LibreOffice (DOCX → PDF dos formulários PJ de cedente). */
+  sofficeBin: process.env.SOFFICE_BIN?.trim() || 'soffice',
+  /** Templates DOCX (ficha cadastral PJ / cartão de assinatura). */
+  cedenteTemplatesPath: process.env.CEDENTE_TEMPLATES_PATH?.trim() || './assets/templates/cedente',
+  /** ZapSign — token vazio: envio para assinatura falha com mensagem clara. */
+  zapsignApiToken: process.env.ZAPSIGN_API_TOKEN?.trim() || '',
+  zapsignBaseUrl: (
+    process.env.ZAPSIGN_BASE_URL?.trim() || 'https://sandbox.api.zapsign.com.br/api/v1'
+  ).replace(/\/$/, ''),
+  zapsignSandbox: process.env.ZAPSIGN_SANDBOX !== 'false' && process.env.ZAPSIGN_SANDBOX !== '0',
+  /** Em sandbox, todos os signatários são redirecionados para este e-mail. */
+  zapsignSandboxSignerEmail: process.env.ZAPSIGN_SANDBOX_SIGNER_EMAIL?.trim() || undefined,
+  zapsignWebhookSecret: process.env.ZAPSIGN_WEBHOOK_SECRET?.trim() || '',
+  /** Signatário institucional ({{assinaturaIndex}} da ficha cadastral). */
+  zapsignIndexSignerName: process.env.ZAPSIGN_INDEX_SIGNER_NAME?.trim() || 'Ipebank',
+  zapsignIndexSignerEmail:
+    process.env.ZAPSIGN_INDEX_SIGNER_EMAIL?.trim() ||
+    process.env.IPEBANK_OFFICIAL_EMAIL?.trim() ||
+    undefined,
   /** Destinatários do aviso de nova proposta de site (vírgula). Vazio: não envia. */
   siteProposalNotifyEmails: (process.env.SITE_PROPOSAL_NOTIFY_EMAILS ?? '')
     .split(',')

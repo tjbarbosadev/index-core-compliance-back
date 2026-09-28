@@ -14,7 +14,12 @@ RUN npx prisma generate && npm run build
 
 FROM node:22-bookworm-slim
 WORKDIR /app
-RUN apt-get update -y && apt-get install -y openssl ca-certificates && rm -rf /var/lib/apt/lists/*
+# LibreOffice Writer converts the cedente PJ DOCX templates to PDF (Carlito/Caladea ≈ Calibri/Cambria)
+RUN apt-get update -y && apt-get install -y --no-install-recommends \
+    openssl ca-certificates \
+    libreoffice-writer-nogui fonts-crosextra-carlito fonts-crosextra-caladea \
+    fonts-liberation2 fonts-dejavu-core \
+  && rm -rf /var/lib/apt/lists/*
 ENV NODE_ENV=production
 ENV HUSKY=0
 ENV TZ=America/Sao_Paulo
@@ -23,6 +28,7 @@ COPY --from=build /app/node_modules ./node_modules
 COPY --from=build /app/dist ./dist
 COPY --from=build /app/prisma ./prisma
 COPY --from=build /app/prisma.config.ts ./
+COPY assets ./assets
 RUN mkdir -p /app/storage
 EXPOSE 3001
 CMD ["node", "dist/index.js"]
