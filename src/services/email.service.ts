@@ -211,6 +211,30 @@ export async function sendSiteProposalEmail(input: {
   return Promise.all(input.recipients.map((to) => sendResendEmail({ to, subject, text, html })));
 }
 
+export async function sendCedenteStageEmail(input: {
+  legalName: string;
+  stageLabel: string;
+  detail: string;
+  onboardingUrl: string;
+}): Promise<SendEmailResult | null> {
+  if (!env.ipebankOfficialEmail) return null;
+  const subject = `Cedente PJ — ${input.stageLabel} — ${input.legalName}`;
+  const text = [
+    `Onboarding de cedente: ${input.legalName}`,
+    `Etapa: ${input.stageLabel}`,
+    input.detail,
+    '',
+    `Abrir no OpCore: ${input.onboardingUrl}`,
+  ].join('\n');
+  const html = `
+    <p>Onboarding de cedente: <strong>${escapeHtml(input.legalName)}</strong></p>
+    <p>Etapa: ${escapeHtml(input.stageLabel)}</p>
+    <p>${escapeHtml(input.detail)}</p>
+    <p><a href="${escapeHtml(input.onboardingUrl)}">Abrir no OpCore</a></p>
+  `;
+  return sendResendEmail({ to: env.ipebankOfficialEmail, subject, text, html });
+}
+
 function logDebugUrlIfNeeded(result: SendEmailResult, url: string) {
   if (result.sent) return;
   if (env.nodeEnv === 'production' && !env.emailDebug) return;

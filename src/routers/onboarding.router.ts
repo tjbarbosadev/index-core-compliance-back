@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { router, permissionProcedure } from '../trpc/procedures.js';
 import * as onboardingService from '../services/onboarding.service.js';
+import * as cedenteService from '../services/cedente-onboarding.service.js';
 
 const createSchema = z.object({
   partyType: z.enum(['pf', 'pj']),
@@ -79,14 +80,25 @@ export const onboardingRouter = router({
     ),
 });
 
+const idInput = z.object({ id: z.string().uuid() });
+const cedenteStageEnum = z.enum([
+  'rascunho',
+  'aguardando_assinatura',
+  'em_analise_juridica',
+  'pendencia_juridica',
+  'em_analise_compliance',
+  'aprovado',
+  'rejeitado',
+]);
+
 export const cedenteOnboardingRouter = router({
-  list: permissionProcedure('cedentes.read').query(() =>
-    onboardingService.listOnboardingProcesses('cedente'),
-  ),
+  list: permissionProcedure('cedentes.read')
+    .input(z.object({ stage: cedenteStageEnum.optional() }).optional())
+    .query(({ input }) => cedenteService.listCedenteOnboardings({ stage: input?.stage })),
 
   getById: permissionProcedure('cedentes.read')
-    .input(z.object({ id: z.string().uuid() }))
-    .query(({ input }) => onboardingService.getOnboardingById(input.id, 'cedente')),
+    .input(idInput)
+    .query(({ input }) => cedenteService.getCedenteOnboarding(input.id)),
 
   create: permissionProcedure('cedentes.write')
     .input(
@@ -97,38 +109,142 @@ export const cedenteOnboardingRouter = router({
         fundName: z.string().optional(),
       }),
     )
-    .mutation(({ input }) =>
-      onboardingService.createOnboarding({
-        partyType: 'pj',
-        cpfCnpj: input.cnpj,
-        legalName: input.legalName,
-        fundId: input.fundId,
-        kind: 'cedente',
+    .mutation(({ input, ctx }) =>
+      cedenteService.createCedenteOnboarding(input, { userId: ctx.user.id, ip: ctx.ip }),
+    ),
+
+  saveSection: permissionProcedure('cedentes.write')
+    .input(
+      z.object({
+        id: z.string().uuid(),
+        section: z.enum(['empresa', 'estrutura']),
+        data: z.record(z.unknown()),
+        advance: z.boolean().default(false),
+      }),
+    )
+    .mutation(({ input, ctx }) =>
+      cedenteService.saveCedenteSection(
+        input.id,
+        input.section,
+        input.data,
+        { advance: input.advance },
+        { userId: ctx.user.id, ip: ctx.ip },
+      ),
+    ),
+
+  requestDocumentUpload: permissionProcedure('cedentes.write')
+    .input(
+      z.object({
+        id: z.string().uuid(),
+        slot: z.string().min(1).max(100),
+        fileName: z.string().min(1).max(255),
+        mimeType: z.string().min(1).max(100),
+        size: z.number().int().positive(),
+      }),
+    )
+    .mutation(({ input, ctx }) =>
+      cedenteService.requestCedenteDocumentUpload(input.id, input, {
+        userId: ctx.user.id,
+        ip: ctx.ip,
       }),
     ),
 
-  advanceStep: permissionProcedure('cedentes.write')
-    .input(z.object({ id: z.string().uuid(), stepData: z.record(z.unknown()) }))
+  confirmDocumentUpload: permissionProcedure('cedentes.write')
+    .input(z.object({ id: z.string().uuid(), documentId: z.string().uuid() }))
     .mutation(({ input, ctx }) =>
-      onboardingService.advanceFromWebPayload(input.id, 'cedente', input.stepData, ctx.user.id),
+      cedenteService.confirmCedenteDocumentUpload(input.id, input.documentId, {
+        userId: ctx.user.id,
+        ip: ctx.ip,
+      }),
+    ),
+
+  submitDocuments: permissionProcedure('cedentes.write')
+    .input(idInput)
+    .mutation(({ input, ctx }) =>
+      cedenteService.submitCedenteDocuments(input.id, { userId: ctx.user.id, ip: ctx.ip }),
+    ),
+
+  generateDocuments: permissionProcedure('cedentes.write')
+    .input(idInput)
+    .mutation(({ input, ctx }) =>
+      cedenteService.generateCedenteDocuments(input.id, { userId: ctx.user.id, ip: ctx.ip }),
+    ),
+
+  sendForSignature: permissionProcedure('cedentes.write')
+    .input(idInput)
+    .mutation(({ input, ctx }) =>
+      cedenteService.sendCedenteForSignature(input.id, { userId: ctx.user.id, ip: ctx.ip }),
+    ),
+
+  refreshSignatures: permissionProcedure('cedentes.write')
+    .input(idInput)
+    .mutation(({ input, ctx }) =>
+      cedenteService.refreshCedenteSignatures(input.id, { userId: ctx.user.id, ip: ctx.ip }),
+    ),
+
+  validateDocument: permissionProcedure('cedentes.legal_review')
+    .input(
+      z.object({
+        id: z.string().uuid(),
+        documentId: z.string().uuid(),
+        approved: z.boolean(),
+        reason: z.string().max(1000).optional(),
+      }),
+    )
+    .mutation(({ input, ctx }) =>
+      cedenteService.validateCedenteDocument(input.id, input, {
+        userId: ctx.user.id,
+        ip: ctx.ip,
+      }),
+    ),
+
+  legalReview: permissionProcedure('cedentes.legal_review')
+    .input(
+      z.object({
+        id: z.string().uuid(),
+        decision: z.enum(['favoravel', 'pendencia', 'desfavoravel']),
+        opinion: z.string().min(10).max(20_000),
+        pendingItems: z.array(z.string().max(500)).max(50).optional(),
+      }),
+    )
+    .mutation(({ input, ctx }) =>
+      cedenteService.submitLegalReview(input.id, input, { userId: ctx.user.id, ip: ctx.ip }),
+    ),
+
+  resubmitToLegal: permissionProcedure('cedentes.write')
+    .input(idInput)
+    .mutation(({ input, ctx }) =>
+      cedenteService.resubmitCedenteToLegal(input.id, { userId: ctx.user.id, ip: ctx.ip }),
+    ),
+
+  saveKycAml: permissionProcedure('cedentes.approve')
+    .input(
+      z.object({
+        id: z.string().uuid(),
+        kyc: z.object({ pepFlag: z.boolean(), restrictiveListHit: z.boolean() }),
+        aml: z.object({ lawfulOriginDeclared: z.boolean() }),
+      }),
+    )
+    .mutation(({ input, ctx }) =>
+      cedenteService.saveCedenteKycAml(input.id, input, { userId: ctx.user.id, ip: ctx.ip }),
     ),
 
   approve: permissionProcedure('cedentes.approve')
     .input(z.object({ id: z.string().uuid(), justification: z.string().min(1) }))
     .mutation(({ input, ctx }) =>
-      onboardingService.approveOnboarding(
-        input.id,
-        'cedente',
-        ctx.user.id,
-        ctx.ip,
-        input.justification,
-      ),
+      cedenteService.approveCedenteOnboarding(input.id, input.justification, {
+        userId: ctx.user.id,
+        ip: ctx.ip,
+      }),
     ),
 
   reject: permissionProcedure('cedentes.approve')
     .input(z.object({ id: z.string().uuid(), reason: z.string().min(1) }))
     .mutation(({ input, ctx }) =>
-      onboardingService.rejectOnboarding(input.id, 'cedente', input.reason, ctx.user.id, ctx.ip),
+      cedenteService.rejectCedenteOnboarding(input.id, input.reason, {
+        userId: ctx.user.id,
+        ip: ctx.ip,
+      }),
     ),
 
   delete: permissionProcedure('cedentes.approve')

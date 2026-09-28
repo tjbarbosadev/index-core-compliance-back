@@ -6,7 +6,9 @@ import { getHTTPStatusCodeFromError } from '@trpc/server/http';
 import { prisma } from '../db/index.js';
 import { COOKIE_NAME, getUserFromSession, verifySessionCookie } from '../services/auth.service.js';
 import { hasPermissionInList, resolveUserPermissions } from '../services/permission.service.js';
-import { keyFromFileUri, saveFile } from '../lib/storage.js';
+import { getAbsolutePath, keyFromFileUri, saveFile } from '../lib/storage.js';
+import { KYC_DOCUMENT_TYPES } from '../lib/errors.js';
+import { MAX_DOCUMENT_BYTES } from '../lib/cedente/document-catalog.js';
 import { getKycReportPdfPath } from '../services/kyc.service.js';
 
 function sendAppError(res: Response, err: unknown, fallback: string) {
@@ -87,7 +89,8 @@ export function registerFilesRoutes(app: Express) {
     '/files/upload/:documentId',
     express.raw({ type: '*/*', limit: '50mb' }),
     async (req, res) => {
-      if (!(await requireDocumentsWrite(req, res))) return;
+      const user = await requireSessionUser(req, res);
+      if (!user) return;
 
       const documentId = req.params.documentId;
       if (!documentId) {
@@ -98,6 +101,20 @@ export function registerFilesRoutes(app: Express) {
       const doc = await prisma.document.findUnique({ where: { id: documentId } });
       if (!doc) {
         res.status(404).json({ error: 'Documento não encontrado' });
+        return;
+      }
+
+      const permissions = await resolveUserPermissions(user.id);
+      const canWrite =
+        hasPermissionInList(permissions, 'documents.write', user.isAdmin) ||
+        (Boolean(doc.slot) && hasPermissionInList(permissions, 'cedentes.write', user.isAdmin));
+      if (!canWrite) {
+        res.status(403).json({ error: 'Permissão ausente' });
+        return;
+      }
+
+      if (doc.slot && Buffer.isBuffer(req.body) && req.body.length > MAX_DOCUMENT_BYTES) {
+        res.status(413).json({ error: 'Arquivo deve ter até 10 MB' });
         return;
       }
 
@@ -131,6 +148,47 @@ export function registerFilesRoutes(app: Express) {
       }
     },
   );
+
+  app.get('/files/documents/:documentId', async (req, res) => {
+    const user = await requireSessionUser(req, res);
+    if (!user) return;
+
+    const doc = await prisma.document.findUnique({ where: { id: req.params.documentId } });
+    if (!doc || !doc.fileUri || !doc.hashSha256) {
+      res.status(404).json({ error: 'Documento não encontrado' });
+      return;
+    }
+
+    const permissions = await resolveUserPermissions(user.id);
+    const can = (key: string) => hasPermissionInList(permissions, key, user.isAdmin);
+    const allowed =
+      can('documents.view_kyc') ||
+      (Boolean(doc.slot) && can('cedentes.legal_review')) ||
+      (!KYC_DOCUMENT_TYPES.has(doc.type) &&
+        (can('documents.read') || (Boolean(doc.slot) && can('cedentes.read'))));
+    if (!allowed) {
+      res.status(403).json({ error: 'Permissão ausente' });
+      return;
+    }
+
+    try {
+      const absolutePath = getAbsolutePath(keyFromFileUri(doc.fileUri));
+      const disposition = req.query.disposition === 'attachment' ? 'attachment' : 'inline';
+      const safeName = doc.fileName.replace(/["\r\n]/g, '');
+      res.setHeader('Content-Type', doc.mimeType ?? 'application/octet-stream');
+      res.setHeader('Content-Disposition', `${disposition}; filename="${safeName}"`);
+      res.setHeader('X-Content-Type-Options', 'nosniff');
+      res.setHeader('Cache-Control', 'private, no-store');
+      const stream = createReadStream(absolutePath);
+      stream.on('error', () => {
+        if (!res.headersSent) res.status(404).json({ error: 'Arquivo não encontrado' });
+        else res.end();
+      });
+      stream.pipe(res);
+    } catch (err) {
+      sendAppError(res, err, 'Falha ao baixar documento');
+    }
+  });
 
   app.get('/files/kyc-reports/:id', async (req, res) => {
     if (!(await requireComplianceRead(req, res))) return;

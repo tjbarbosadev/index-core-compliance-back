@@ -168,6 +168,60 @@ export async function createOnboarding(input: {
   return loadProcess(process.id, kind);
 }
 
+export type KycFlags = { pepFlag?: boolean; restrictiveListHit?: boolean };
+
+/**
+ * Restrictive-list hit rejects the process (and throws); PEP raises the party risk.
+ * Both open a compliance alert.
+ */
+export async function applyKycScreening(input: {
+  processId: string;
+  partyId: string;
+  kyc: KycFlags;
+  stepData: StepData;
+  userId?: string;
+  rejectExtra?: Prisma.OnboardingProcessUpdateInput;
+}) {
+  const { processId, partyId, kyc, userId } = input;
+  if (kyc.restrictiveListHit) {
+    await prisma.onboardingProcess.update({
+      where: { id: processId },
+      data: {
+        status: 'rejeitado',
+        stepDataJson: input.stepData as Prisma.InputJsonValue,
+        ...input.rejectExtra,
+      },
+    });
+    await prisma.complianceAlert.create({
+      data: {
+        type: 'lista_restritiva',
+        severity: 'critica',
+        entityType: 'onboarding_process',
+        entityId: processId,
+        description: 'Lista restritiva identificada no KYC',
+        createdById: userId,
+      },
+    });
+    throw APP_ERROR.BAD_REQUEST('Rejeição automática — lista restritiva');
+  }
+  if (kyc.pepFlag) {
+    await prisma.party.update({
+      where: { id: partyId },
+      data: { pepFlag: true, riskLevel: 'alto' },
+    });
+    await prisma.complianceAlert.create({
+      data: {
+        type: 'pep',
+        severity: 'alta',
+        entityType: 'onboarding_process',
+        entityId: processId,
+        description: 'PEP identificado no onboarding',
+        createdById: userId,
+      },
+    });
+  }
+}
+
 export async function advanceOnboardingStep(
   id: string,
   kind: OnboardingKind,
@@ -234,40 +288,13 @@ export async function advanceOnboardingStep(
   }
 
   if (stepData.kyc && typeof stepData.kyc === 'object') {
-    const kyc = stepData.kyc as { pepFlag?: boolean; restrictiveListHit?: boolean };
-    if (kyc.restrictiveListHit) {
-      await prisma.onboardingProcess.update({
-        where: { id },
-        data: { status: 'rejeitado', stepDataJson: mergedData as Prisma.InputJsonValue },
-      });
-      await prisma.complianceAlert.create({
-        data: {
-          type: 'lista_restritiva',
-          severity: 'critica',
-          entityType: 'onboarding_process',
-          entityId: id,
-          description: 'Lista restritiva identificada no KYC',
-          createdById: userId,
-        },
-      });
-      throw APP_ERROR.BAD_REQUEST('Rejeição automática — lista restritiva');
-    }
-    if (kyc.pepFlag) {
-      await prisma.party.update({
-        where: { id: process.partyId },
-        data: { pepFlag: true, riskLevel: 'alto' },
-      });
-      await prisma.complianceAlert.create({
-        data: {
-          type: 'pep',
-          severity: 'alta',
-          entityType: 'onboarding_process',
-          entityId: id,
-          description: 'PEP identificado no onboarding',
-          createdById: userId,
-        },
-      });
-    }
+    await applyKycScreening({
+      processId: id,
+      partyId: process.partyId,
+      kyc: stepData.kyc as KycFlags,
+      stepData: mergedData,
+      userId,
+    });
   }
 
   const owners = stepData.beneficialOwners;
