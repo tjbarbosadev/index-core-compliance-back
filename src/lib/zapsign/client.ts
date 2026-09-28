@@ -116,6 +116,10 @@ export async function getZapSignDocument(token: string): Promise<ZapSignDocument
   return request<ZapSignDocument>(`/docs/${encodeURIComponent(token)}/`);
 }
 
+export async function deleteZapSignDocument(token: string): Promise<void> {
+  await request<unknown>(`/docs/${encodeURIComponent(token)}/`, { method: 'DELETE' });
+}
+
 /** Signed files are short-lived S3 URLs returned by ZapSign. */
 export async function downloadZapSignFile(url: string): Promise<Buffer> {
   const parsed = new URL(url);

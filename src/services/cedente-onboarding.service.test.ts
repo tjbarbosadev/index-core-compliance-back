@@ -1,32 +1,41 @@
 import type { DocumentStatus } from '@prisma/client';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-const { prismaMock, downloadZapSignFile, sendCedenteStageEmail, logAudit, saveFile } = vi.hoisted(
-  () => {
-    const prismaMock = {
-      onboardingProcess: { findFirst: vi.fn(), update: vi.fn() },
-      onboardingStep: { updateMany: vi.fn() },
-      signatureEnvelope: {
-        findUnique: vi.fn(),
-        update: vi.fn(),
-        updateMany: vi.fn(),
-        count: vi.fn(),
-      },
-      document: { findMany: vi.fn(), findUnique: vi.fn(), update: vi.fn() },
-      legalReview: { findFirst: vi.fn(), findMany: vi.fn() },
-      party: { update: vi.fn() },
-      $transaction: vi.fn(),
-    };
-    prismaMock.$transaction.mockImplementation((fn: (tx: unknown) => unknown) => fn(prismaMock));
-    return {
-      prismaMock,
-      downloadZapSignFile: vi.fn(),
-      sendCedenteStageEmail: vi.fn(),
-      logAudit: vi.fn(),
-      saveFile: vi.fn(),
-    };
-  },
-);
+const {
+  prismaMock,
+  downloadZapSignFile,
+  deleteZapSignDocument,
+  softDeleteOnboarding,
+  sendCedenteStageEmail,
+  logAudit,
+  saveFile,
+} = vi.hoisted(() => {
+  const prismaMock = {
+    onboardingProcess: { findFirst: vi.fn(), update: vi.fn() },
+    onboardingStep: { updateMany: vi.fn() },
+    signatureEnvelope: {
+      findMany: vi.fn(),
+      findUnique: vi.fn(),
+      update: vi.fn(),
+      updateMany: vi.fn(),
+      count: vi.fn(),
+    },
+    document: { findMany: vi.fn(), findUnique: vi.fn(), update: vi.fn() },
+    legalReview: { findFirst: vi.fn(), findMany: vi.fn() },
+    party: { update: vi.fn() },
+    $transaction: vi.fn(),
+  };
+  prismaMock.$transaction.mockImplementation((fn: (tx: unknown) => unknown) => fn(prismaMock));
+  return {
+    prismaMock,
+    downloadZapSignFile: vi.fn(),
+    deleteZapSignDocument: vi.fn(),
+    softDeleteOnboarding: vi.fn(),
+    sendCedenteStageEmail: vi.fn(),
+    logAudit: vi.fn(),
+    saveFile: vi.fn(),
+  };
+});
 
 vi.mock('../db/index.js', () => ({ prisma: prismaMock }));
 vi.mock('../lib/env.js', () => ({
@@ -37,6 +46,7 @@ vi.mock('./email.service.js', () => ({ sendCedenteStageEmail }));
 vi.mock('./onboarding.service.js', () => ({
   applyKycScreening: vi.fn(),
   createOnboarding: vi.fn(),
+  softDeleteOnboarding,
 }));
 vi.mock('../lib/storage.js', () => ({
   buildObjectKey: vi.fn(),
@@ -47,6 +57,7 @@ vi.mock('../lib/storage.js', () => ({
 }));
 vi.mock('../lib/zapsign/client.js', () => ({
   createZapSignDocument: vi.fn(),
+  deleteZapSignDocument,
   downloadZapSignFile,
   getZapSignDocument: vi.fn(),
 }));
@@ -63,6 +74,7 @@ import {
   applyZapSignDocumentState,
   approveCedenteOnboarding,
   currentDocumentsBySlot,
+  deleteCedenteOnboarding,
   documentsBlockingApproval,
   hashForm,
   submitLegalReview,
@@ -102,6 +114,64 @@ function approvedDocsForFixture() {
 beforeEach(() => {
   vi.clearAllMocks();
   prismaMock.$transaction.mockImplementation((fn: (tx: unknown) => unknown) => fn(prismaMock));
+});
+
+describe('deleteCedenteOnboarding', () => {
+  const writer = { isAdmin: false, permissions: ['cedentes.read', 'cedentes.write'] };
+  const approver = { isAdmin: false, permissions: ['cedentes.read', 'cedentes.approve'] };
+
+  beforeEach(() => {
+    prismaMock.signatureEnvelope.findMany.mockResolvedValue([]);
+    softDeleteOnboarding.mockResolvedValue({ success: true });
+  });
+
+  it('lets cedentes.write delete a draft', async () => {
+    mockProcess({ cedenteStage: 'rascunho', currentStep: 1 });
+    await expect(deleteCedenteOnboarding(processId, writer, actor)).resolves.toEqual({
+      success: true,
+    });
+    expect(softDeleteOnboarding).toHaveBeenCalledWith(
+      processId,
+      'cedente',
+      actor.userId,
+      undefined,
+    );
+  });
+
+  it('forbids cedentes.write outside the draft stage', async () => {
+    mockProcess({ cedenteStage: 'em_analise_juridica' });
+    await expect(deleteCedenteOnboarding(processId, writer, actor)).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+    });
+    expect(softDeleteOnboarding).not.toHaveBeenCalled();
+  });
+
+  it('forbids users without write or approve', async () => {
+    mockProcess({ cedenteStage: 'rascunho' });
+    await expect(
+      deleteCedenteOnboarding(processId, { isAdmin: false, permissions: ['cedentes.read'] }, actor),
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+  });
+
+  it('lets cedentes.approve delete at any stage and cancels pending envelopes', async () => {
+    mockProcess({ cedenteStage: 'aguardando_assinatura' });
+    prismaMock.signatureEnvelope.findMany.mockResolvedValue([
+      { id: 'env-1', externalToken: 'zap-1' },
+      { id: 'env-2', externalToken: 'zap-2' },
+    ]);
+    deleteZapSignDocument.mockResolvedValueOnce(undefined).mockRejectedValueOnce(new Error('404'));
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    await deleteCedenteOnboarding(processId, approver, actor);
+
+    expect(deleteZapSignDocument).toHaveBeenCalledWith('zap-1');
+    expect(deleteZapSignDocument).toHaveBeenCalledWith('zap-2');
+    expect(prismaMock.signatureEnvelope.updateMany).toHaveBeenCalledWith({
+      where: { id: { in: ['env-1', 'env-2'] } },
+      data: { status: 'cancelado' },
+    });
+    expect(softDeleteOnboarding).toHaveBeenCalled();
+  });
 });
 
 describe('hashForm', () => {

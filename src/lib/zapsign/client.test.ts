@@ -12,6 +12,7 @@ vi.mock('../env.js', () => ({ env }));
 import {
   ZapSignConfigError,
   createZapSignDocument,
+  deleteZapSignDocument,
   downloadZapSignFile,
   resolveSignerEmail,
 } from './client.js';
@@ -108,6 +109,17 @@ describe('createZapSignDocument', () => {
       }),
     ).rejects.toThrow(ZapSignConfigError);
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+});
+
+describe('deleteZapSignDocument', () => {
+  it('sends DELETE for the document token', async () => {
+    fetchMock.mockResolvedValue(new Response('', { status: 200 }));
+    await deleteZapSignDocument('doc-token');
+    expect(fetchMock).toHaveBeenCalledWith(
+      'https://sandbox.api.zapsign.com.br/api/v1/docs/doc-token/',
+      expect.objectContaining({ method: 'DELETE' }),
+    );
   });
 });
 

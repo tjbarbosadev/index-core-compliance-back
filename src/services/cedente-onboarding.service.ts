@@ -28,6 +28,7 @@ import { docxToPdf } from '../lib/cedente/pdf/docx-to-pdf.js';
 import { buildLegalOpinionPdf } from '../lib/cedente/pdf/legal-opinion.js';
 import {
   createZapSignDocument,
+  deleteZapSignDocument,
   downloadZapSignFile,
   getZapSignDocument,
   type ZapSignDocument,
@@ -42,7 +43,13 @@ import {
 } from '../schemas/cedente-pj.schema.js';
 import { logAudit } from './audit.service.js';
 import { sendCedenteStageEmail } from './email.service.js';
-import { applyKycScreening, createOnboarding, type KycFlags } from './onboarding.service.js';
+import {
+  applyKycScreening,
+  createOnboarding,
+  softDeleteOnboarding,
+  type KycFlags,
+} from './onboarding.service.js';
+import { hasPermissionInList } from './permission.service.js';
 
 export const CEDENTE_TOTAL_STEPS = 7;
 
@@ -1322,4 +1329,45 @@ export async function rejectCedenteOnboarding(id: string, reason: string, actor:
   await audit(actor, 'cedentes.reject', id, { reason: trimmed });
   await notifyStage(id, process.party.legalName, 'rejeitado', `Motivo: ${trimmed}`);
   return reloadCedenteOnboarding(id);
+}
+
+/**
+ * `cedentes.approve` deletes at any stage; `cedentes.write` only drafts. Pending
+ * ZapSign envelopes are cancelled so nobody signs a deleted onboarding.
+ */
+export async function deleteCedenteOnboarding(
+  id: string,
+  access: { isAdmin: boolean; permissions: string[] },
+  actor: Actor,
+) {
+  const process = await findCedenteProcess(id);
+  const can = (key: string) => hasPermissionInList(access.permissions, key, access.isAdmin);
+  if (!can('cedentes.approve')) {
+    if (!can('cedentes.write')) throw APP_ERROR.FORBIDDEN();
+    if (process.cedenteStage !== 'rascunho') {
+      throw new TRPCError({
+        code: 'FORBIDDEN',
+        message: 'Só rascunhos podem ser excluídos sem permissão de aprovação',
+      });
+    }
+  }
+
+  const pending = await prisma.signatureEnvelope.findMany({
+    where: { onboardingId: id, status: 'pendente' },
+  });
+  for (const envelope of pending) {
+    try {
+      await deleteZapSignDocument(envelope.externalToken);
+    } catch (err) {
+      console.error('[zapsign] falha ao cancelar envelope', envelope.externalToken, err);
+    }
+  }
+  if (pending.length > 0) {
+    await prisma.signatureEnvelope.updateMany({
+      where: { id: { in: pending.map((e) => e.id) } },
+      data: { status: 'cancelado' },
+    });
+  }
+
+  return softDeleteOnboarding(id, 'cedente', actor.userId, actor.ip);
 }

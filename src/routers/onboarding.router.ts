@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { router, permissionProcedure } from '../trpc/procedures.js';
+import { router, permissionProcedure, protectedProcedure } from '../trpc/procedures.js';
 import * as onboardingService from '../services/onboarding.service.js';
 import * as cedenteService from '../services/cedente-onboarding.service.js';
 
@@ -247,9 +247,13 @@ export const cedenteOnboardingRouter = router({
       }),
     ),
 
-  delete: permissionProcedure('cedentes.approve')
+  delete: protectedProcedure
     .input(z.object({ id: z.string().uuid() }))
     .mutation(({ input, ctx }) =>
-      onboardingService.softDeleteOnboarding(input.id, 'cedente', ctx.user.id, ctx.ip),
+      cedenteService.deleteCedenteOnboarding(
+        input.id,
+        { isAdmin: ctx.user.isAdmin, permissions: ctx.permissions },
+        { userId: ctx.user.id, ip: ctx.ip },
+      ),
     ),
 });
