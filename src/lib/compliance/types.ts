@@ -89,3 +89,51 @@ export interface GetDossierParams {
   providerSlug?: string;
   requestedBy?: string;
 }
+
+export type BillingVendor = 'bigdatacorp' | 'lemit' | 'apollo';
+
+export type ProviderBillingStatus =
+  | 'ok'
+  | 'low_balance'
+  | 'payment_issue'
+  | 'ip_blocked'
+  | 'unauthorized'
+  | 'not_configured'
+  | 'no_api'
+  | 'error';
+
+export interface ProviderBillingCard {
+  vendor: BillingVendor;
+  name: string;
+  status: ProviderBillingStatus;
+  statusMessage: string | null;
+  checkedAt: string;
+  billingModel: string;
+  portalUrl: string;
+  howToPay: string[];
+  monthUsage: { requests: number; credits: number | null };
+  lemit?: { saldo: number | null; consumo: number | null };
+  apollo?: {
+    rateLimits: Array<{
+      endpoint: string;
+      window: 'minute' | 'hour' | 'day';
+      limit: number | null;
+      consumed: number | null;
+      leftOver: number | null;
+    }>;
+  };
+  bigdatacorp?: {
+    requests: number;
+    grossBrl: number;
+    discount: number;
+    estimatedBrl: number;
+    unpricedRequests: number;
+    bySlug: Array<{ slug: string; requests: number; unitBrl: number | null; grossBrl: number }>;
+  };
+}
+
+export interface ProviderBillingOverview {
+  generatedAt: string;
+  monthStart: string;
+  providers: ProviderBillingCard[];
+}

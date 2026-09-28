@@ -2,6 +2,7 @@ import cron from 'node-cron';
 import { prisma } from '../db/index.js';
 import { runAmortizationAlertSlotBatch } from '../services/amortization-alert.service.js';
 import { runDailyYieldJob } from '../services/cotista-yield.service.js';
+import { runVendorInvoiceAlertJob } from '../services/vendor-invoice-alert.service.js';
 
 const CRON_TZ = 'America/Sao_Paulo';
 
@@ -32,6 +33,13 @@ export async function runAmortizationAlertJobs(period: 'am' | 'pm'): Promise<voi
     await runAmortizationAlertSlotBatch(period);
   } catch (err) {
     console.error('[job] falha no alerta de amortização', err);
+  }
+  if (period === 'am') {
+    try {
+      await runVendorInvoiceAlertJob();
+    } catch (err) {
+      console.error('[job] falha no aviso de faturas de APIs pagas', err);
+    }
   }
   console.log(`[job] amortization-alert ${period} ${CRON_TZ} finished`);
 }

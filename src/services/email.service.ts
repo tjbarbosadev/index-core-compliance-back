@@ -248,3 +248,17 @@ function escapeHtml(value: string): string {
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;');
 }
+
+export async function sendVendorInvoiceAlertEmail(input: {
+  to: string;
+  subject: string;
+  lines: string[];
+  adminUrl: string;
+}): Promise<SendEmailResult> {
+  const text = [...input.lines, '', `Detalhes e boletos: ${input.adminUrl}`].join('\n');
+  const html = `
+    <ul>${input.lines.map((line) => `<li>${escapeHtml(line)}</li>`).join('')}</ul>
+    <p><a href="${escapeHtml(input.adminUrl)}">Abrir Custos e faturas no Admin</a></p>
+  `;
+  return sendResendEmail({ to: input.to, subject: input.subject, text, html });
+}

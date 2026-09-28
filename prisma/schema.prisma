@@ -302,6 +302,7 @@ model User {
   kycReports          KycReport[]
   whatsappSession     WhatsappSession?
   legalReviews        LegalReview[]
+  vendorInvoices      VendorInvoice[]
 
   @@map("users")
 }
@@ -939,6 +940,53 @@ model WhatsappSession {
   @@index([status])
   @@index([phoneNormalized])
   @@map("whatsapp_sessions")
+}
+
+// ============================================================================
+// VENDOR BILLING (APIs pagas: BDC, Lemit, Apollo)
+// ============================================================================
+
+enum BillingVendor {
+  bigdatacorp
+  lemit
+  apollo
+
+  @@map("billing_vendor")
+}
+
+/// `vencida` não é persistido: derivado de `pendente` + `due_date` < hoje.
+enum VendorInvoiceStatus {
+  pendente
+  pago
+  cancelado
+
+  @@map("vendor_invoice_status")
+}
+
+model VendorInvoice {
+  id             String              @id @default(uuid()) @db.Uuid
+  vendor         BillingVendor
+  /** Primeiro dia do mês de competência. */
+  referenceMonth DateTime            @map("reference_month") @db.Date
+  description    String?             @db.VarChar(255)
+  amount         Decimal             @db.Decimal(18, 2)
+  dueDate        DateTime            @map("due_date") @db.Date
+  status         VendorInvoiceStatus @default(pendente)
+  boletoLine     String?             @map("boleto_line") @db.VarChar(64)
+  boletoUrl      String?             @map("boleto_url")
+  documentUri    String?             @map("document_uri")
+  documentName   String?             @map("document_name") @db.VarChar(255)
+  notes          String?             @db.Text
+  paidAt         DateTime?           @map("paid_at") @db.Timestamptz
+  createdById    String?             @map("created_by") @db.Uuid
+  createdAt      DateTime            @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt      DateTime            @updatedAt @map("updated_at") @db.Timestamptz
+
+  createdBy User? @relation(fields: [createdById], references: [id], onDelete: SetNull)
+
+  @@index([status, dueDate])
+  @@index([vendor, referenceMonth])
+  @@map("vendor_invoices")
 }
 
 // ============================================================================

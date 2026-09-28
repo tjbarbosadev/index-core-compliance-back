@@ -80,6 +80,19 @@ export const env = {
   amortizationAlertTelegramChatId:
     process.env.AMORTIZATION_ALERT_TELEGRAM_CHAT_ID?.trim() || undefined,
   amortizationAlertEmail: process.env.AMORTIZATION_ALERT_EMAIL?.trim() || undefined,
+  /** Aviso diário 09:00 de faturas de APIs pagas (BDC/Lemit/Apollo) — off por padrão. */
+  vendorInvoiceAlertEnabled:
+    process.env.VENDOR_INVOICE_ALERT_ENABLED === '1' ||
+    process.env.VENDOR_INVOICE_ALERT_ENABLED === 'true',
+  vendorInvoiceAlertDays: Number(process.env.VENDOR_INVOICE_ALERT_DAYS ?? 3),
+  vendorInvoiceAlertEmails: (process.env.VENDOR_INVOICE_ALERT_EMAILS ?? '')
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean),
+  vendorInvoiceAlertTelegramChatId:
+    process.env.VENDOR_INVOICE_ALERT_TELEGRAM_CHAT_ID?.trim() ||
+    process.env.AMORTIZATION_ALERT_TELEGRAM_CHAT_ID?.trim() ||
+    undefined,
   /** Destinos WhatsApp (Johny/Bruno) — E.164 separados por vírgula. */
   amortizationAlertWhatsappTo: process.env.AMORTIZATION_ALERT_WHATSAPP_TO?.trim() || undefined,
   /** OpenWA gateway (CRM `crm_openwa` na rede caddy). Todos opcionais — CI/boot sem secrets. */

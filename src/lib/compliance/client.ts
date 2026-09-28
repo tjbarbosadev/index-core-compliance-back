@@ -3,6 +3,7 @@ import type {
   ComplianceDossier,
   ConsultResult,
   GetDossierParams,
+  ProviderBillingOverview,
   RiskAssessmentResult,
 } from './types.js';
 
@@ -194,6 +195,14 @@ export class ComplianceApiClient {
       `/v1/compliance/dossier/${encoded}/risk?${qs}`,
       {},
       { timeoutMs: ComplianceApiClient.LONG_TIMEOUT_MS },
+    );
+  }
+
+  getProviderBilling(): Promise<ProviderBillingOverview> {
+    return this.request<ProviderBillingOverview>(
+      '/v1/billing/providers',
+      {},
+      { timeoutMs: 30_000 },
     );
   }
 }

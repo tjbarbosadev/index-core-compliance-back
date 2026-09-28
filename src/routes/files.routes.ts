@@ -6,7 +6,8 @@ import { getHTTPStatusCodeFromError } from '@trpc/server/http';
 import { prisma } from '../db/index.js';
 import { COOKIE_NAME, getUserFromSession, verifySessionCookie } from '../services/auth.service.js';
 import { hasPermissionInList, resolveUserPermissions } from '../services/permission.service.js';
-import { getAbsolutePath, keyFromFileUri, saveFile } from '../lib/storage.js';
+import { fileUriForKey, getAbsolutePath, keyFromFileUri, saveFile } from '../lib/storage.js';
+import { vendorInvoiceObjectKey } from '../services/vendor-billing.service.js';
 import { KYC_DOCUMENT_TYPES } from '../lib/errors.js';
 import { MAX_DOCUMENT_BYTES } from '../lib/cedente/document-catalog.js';
 import { getKycReportPdfPath } from '../services/kyc.service.js';
@@ -48,6 +49,19 @@ async function requireDocumentsWrite(req: Request, res: Response) {
 
   const permissions = await resolveUserPermissions(user.id);
   if (!hasPermissionInList(permissions, 'documents.write', user.isAdmin)) {
+    res.status(403).json({ error: 'Permissão ausente' });
+    return null;
+  }
+
+  return user;
+}
+
+async function requireBillingAdmin(req: Request, res: Response) {
+  const user = await requireSessionUser(req, res);
+  if (!user) return null;
+
+  const permissions = await resolveUserPermissions(user.id);
+  if (!hasPermissionInList(permissions, 'admin.manage_access', user.isAdmin)) {
     res.status(403).json({ error: 'Permissão ausente' });
     return null;
   }
@@ -302,6 +316,75 @@ export function registerFilesRoutes(app: Express) {
       res.json(checklist);
     } catch (err) {
       sendAppError(res, err, 'Falha ao remover documento');
+    }
+  });
+
+  /** PDF do boleto / NF de fornecedor (página Custos e faturas — só admin). */
+  app.put(
+    '/files/vendor-invoices/:id',
+    express.raw({ type: 'application/pdf', limit: '12mb' }),
+    async (req, res) => {
+      const user = await requireBillingAdmin(req, res);
+      if (!user) return;
+
+      const body = req.body;
+      if (!Buffer.isBuffer(body) || body.length === 0) {
+        res.status(400).json({ error: 'Envie um PDF (Content-Type: application/pdf)' });
+        return;
+      }
+      if (body.subarray(0, 4).toString('latin1') !== '%PDF') {
+        res.status(400).json({ error: 'Arquivo não é um PDF válido' });
+        return;
+      }
+
+      try {
+        const invoice = await prisma.vendorInvoice.findUnique({ where: { id: req.params.id } });
+        if (!invoice) {
+          res.status(404).json({ error: 'Fatura não encontrada' });
+          return;
+        }
+        const key = vendorInvoiceObjectKey(invoice.id);
+        await saveFile(key, body);
+        const rawName = String(req.headers['x-file-name'] ?? 'boleto.pdf');
+        const documentName = decodeURIComponent(rawName)
+          .replace(/["\r\n/\\]/g, '')
+          .slice(0, 255);
+        await prisma.vendorInvoice.update({
+          where: { id: invoice.id },
+          data: { documentUri: fileUriForKey(key), documentName: documentName || 'boleto.pdf' },
+        });
+        res.status(204).end();
+      } catch (err) {
+        sendAppError(res, err, 'Falha ao salvar PDF');
+      }
+    },
+  );
+
+  app.get('/files/vendor-invoices/:id', async (req, res) => {
+    if (!(await requireBillingAdmin(req, res))) return;
+
+    const invoice = await prisma.vendorInvoice.findUnique({ where: { id: req.params.id } });
+    if (!invoice?.documentUri) {
+      res.status(404).json({ error: 'PDF não encontrado' });
+      return;
+    }
+
+    try {
+      const absolutePath = getAbsolutePath(keyFromFileUri(invoice.documentUri));
+      const disposition = req.query.disposition === 'attachment' ? 'attachment' : 'inline';
+      const safeName = (invoice.documentName ?? 'boleto.pdf').replace(/["\r\n]/g, '');
+      res.setHeader('Content-Type', 'application/pdf');
+      res.setHeader('Content-Disposition', `${disposition}; filename="${safeName}"`);
+      res.setHeader('X-Content-Type-Options', 'nosniff');
+      res.setHeader('Cache-Control', 'private, no-store');
+      const stream = createReadStream(absolutePath);
+      stream.on('error', () => {
+        if (!res.headersSent) res.status(404).json({ error: 'Arquivo não encontrado' });
+        else res.end();
+      });
+      stream.pipe(res);
+    } catch (err) {
+      sendAppError(res, err, 'Falha ao baixar PDF');
     }
   });
 }

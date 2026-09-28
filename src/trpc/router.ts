@@ -14,6 +14,7 @@ import { investidosRouter } from '../routers/investidos.router.js';
 import { transactionsRouter } from '../routers/transactions.router.js';
 import { reportsRouter } from '../routers/reports.router.js';
 import { whatsappAlertsRouter } from '../routers/whatsapp-alerts.router.js';
+import { billingRouter } from '../routers/billing.router.js';
 
 export const appRouter = router({
   health: healthRouter,
@@ -33,6 +34,7 @@ export const appRouter = router({
   transactions: transactionsRouter,
   reports: reportsRouter,
   whatsappAlerts: whatsappAlertsRouter,
+  billing: billingRouter,
 });
 
 export type AppRouter = typeof appRouter;

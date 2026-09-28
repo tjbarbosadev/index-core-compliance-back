@@ -27,7 +27,7 @@ app.use(
       }
       callback(null, false);
     },
-    allowedHeaders: ['Authorization', 'Content-Type', 'X-API-Key'],
+    allowedHeaders: ['Authorization', 'Content-Type', 'X-API-Key', 'X-File-Name'],
     credentials: true,
   }),
 );
