@@ -63,7 +63,7 @@ const createFundSchema = z.object({
   description: z.string().optional(),
   contactEmail: z.string().optional(),
   contactPhone: z.string().optional(),
-  regulatoryLimitsJson: z.record(z.string(), z.number()).optional(),
+  regulatoryLimitsJson: z.record(z.string(), z.number().min(0).max(100)).optional(),
   extraInfoJson: extraInfoSchema.optional(),
 });
 
