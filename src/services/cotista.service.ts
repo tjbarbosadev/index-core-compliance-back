@@ -32,7 +32,7 @@ const QUOTA_LABELS: Record<string, string> = {
 };
 
 /** Valor unitário de cada cota (R$). */
-export const QUOTA_UNIT_BRL = 10_000;
+export const QUOTA_UNIT_BRL = 1_000;
 
 function mapYieldRow(y: {
   referenceDate: Date;

@@ -19,7 +19,7 @@ describe('toPartnerFund', () => {
             name: 'Cota Sênior I',
             targetYield: 'CDI + 4% a.a.',
             termMonths: 12,
-            minAmount: 10000,
+            minAmount: 1000,
           },
         ],
         regulator: 'CVM',

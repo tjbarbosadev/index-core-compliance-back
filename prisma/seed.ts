@@ -497,7 +497,7 @@ async function main() {
           amortization: 'Mensal',
           liquidity: 'Mensal',
           risk: 'Baixo',
-          minAmount: 10000,
+          minAmount: 1000,
         },
         {
           name: 'Cota Sênior II',
@@ -506,7 +506,7 @@ async function main() {
           amortization: 'No vencimento',
           liquidity: 'No vencimento',
           risk: 'Baixo',
-          minAmount: 10000,
+          minAmount: 1000,
         },
       ],
     },
