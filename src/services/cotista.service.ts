@@ -470,6 +470,8 @@ export type CotistaWriteInput = {
   cpfCnpj: string;
   email?: string;
   phone?: string;
+  /** When true, party is excluded from consolidated PL (simulation / QA). */
+  excludeFromPl?: boolean;
   positions: Array<{
     id?: string;
     fundId: string;
@@ -555,6 +557,7 @@ export async function createCotista(input: CotistaWriteInput, userId: string, ip
         status: 'aprovado',
         riskLevel: 'baixo',
         pepFlag: false,
+        excludeFromPl: Boolean(input.excludeFromPl),
         approvedAt: new Date(),
         approvedBy: userId,
       },

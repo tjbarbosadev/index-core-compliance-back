@@ -404,6 +404,11 @@ model Party {
   /** Soft delete (LGPD) — listagens e unique ativo ignoram deletedAt != null */
   deletedAt        DateTime?   @map("deleted_at") @db.Timestamptz
   deletedById      String?     @map("deleted_by_id") @db.Uuid
+  /**
+   * Simulation / QA parties: visible in portal & admin, excluded from consolidated PL
+   * (fund-pl.service and dashboard KPIs).
+   */
+  excludeFromPl    Boolean     @default(false) @map("exclude_from_pl")
   /** nextcorefim Application.id — shared Mega folder for FIM KYC docs */
   fimApplicationId String?     @unique @map("fim_application_id") @db.VarChar(36)
   createdAt        DateTime    @default(now()) @map("created_at") @db.Timestamptz
@@ -422,6 +427,7 @@ model Party {
   @@index([status, expiresAt])
   @@index([cpfCnpj])
   @@index([deletedAt])
+  @@index([excludeFromPl])
   @@map("parties")
 }
 

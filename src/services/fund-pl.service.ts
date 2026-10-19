@@ -19,14 +19,22 @@ const linkInclude = {
   dailyYields: { orderBy: { referenceDate: 'desc' as const }, take: 1 },
 } as const;
 
+/** Links that count toward consolidated PL (excludes simulation parties + soft-deleted). */
+const plLinkWhere: Prisma.PartyFundLinkWhereInput = {
+  party: { excludeFromPl: false, deletedAt: null },
+};
+
 export async function sumGlobalNetWorthFromLinks(): Promise<number> {
-  const links = await prisma.partyFundLink.findMany({ include: linkInclude });
+  const links = await prisma.partyFundLink.findMany({
+    where: plLinkWhere,
+    include: linkInclude,
+  });
   return links.reduce((sum, link) => sum + balanceForPartyFundLink(link), 0);
 }
 
 export async function sumFundNetWorthFromLinks(fundId: string): Promise<number> {
   const links = await prisma.partyFundLink.findMany({
-    where: { fundId },
+    where: { fundId, ...plLinkWhere },
     include: linkInclude,
   });
   return links.reduce((sum, link) => sum + balanceForPartyFundLink(link), 0);
@@ -35,7 +43,7 @@ export async function sumFundNetWorthFromLinks(fundId: string): Promise<number> 
 export async function netWorthByFundIds(fundIds: string[]): Promise<Map<string, number>> {
   if (fundIds.length === 0) return new Map();
   const links = await prisma.partyFundLink.findMany({
-    where: { fundId: { in: fundIds } },
+    where: { fundId: { in: fundIds }, ...plLinkWhere },
     include: linkInclude,
   });
   const map = new Map<string, number>();
