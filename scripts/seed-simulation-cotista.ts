@@ -8,6 +8,7 @@
  * Usage: NODE_ENV=development npx tsx scripts/seed-simulation-cotista.ts
  */
 import { prisma } from '../src/db/index.js';
+import { NEXAFIDIC_FUND_CNPJ } from '../src/lib/nexafidic-normalize.js';
 import { QUOTA_UNIT_BRL } from '../src/services/cotista.service.js';
 import { backfillPartyFundLinkYields } from '../src/services/cotista-yield.service.js';
 import { sumGlobalNetWorthFromLinks } from '../src/services/fund-pl.service.js';
@@ -15,6 +16,7 @@ import { sumGlobalNetWorthFromLinks } from '../src/services/fund-pl.service.js';
 export const SIM_EMAIL = 'manager@indexcore.com.br';
 export const SIM_CPF = '11144477735';
 export const SIM_NAME = 'Manager IndexCore (simulação)';
+export const SIM_FIDC_CNPJ = NEXAFIDIC_FUND_CNPJ;
 
 const POSITIONS = [
   {
@@ -30,17 +32,16 @@ const POSITIONS = [
 ];
 
 async function resolveFundId(): Promise<{ id: string; name: string }> {
-  const fim = await prisma.fund.findFirst({
-    where: { status: 'ativo', modality: 'fim' },
+  const byCnpj = await prisma.fund.findFirst({
+    where: { cnpj: SIM_FIDC_CNPJ },
+  });
+  if (byCnpj) return { id: byCnpj.id, name: byCnpj.name };
+  const fidc = await prisma.fund.findFirst({
+    where: { status: 'ativo', modality: 'fidc' },
     orderBy: { name: 'asc' },
   });
-  if (fim) return { id: fim.id, name: fim.name };
-  const any = await prisma.fund.findFirst({
-    where: { status: 'ativo' },
-    orderBy: { name: 'asc' },
-  });
-  if (!any) throw new Error('Nenhum fundo ativo encontrado');
-  return { id: any.id, name: any.name };
+  if (fidc) return { id: fidc.id, name: fidc.name };
+  throw new Error(`Fundo FIDC não encontrado (CNPJ ${SIM_FIDC_CNPJ} ou modality=fidc ativo)`);
 }
 
 export async function ensureSimulationCotista() {
@@ -104,6 +105,14 @@ export async function ensureSimulationCotista() {
       suitabilityResult: 'moderado',
     },
   });
+
+  // Drop links on other funds (e.g. prior FIM mistake); yields cascade.
+  const orphaned = await prisma.partyFundLink.deleteMany({
+    where: { partyId: party.id, fundId: { not: fund.id } },
+  });
+  if (orphaned.count > 0) {
+    console.log(`[sim] removed ${orphaned.count} PartyFundLink(s) outside ${fund.name}`);
+  }
 
   for (const pos of POSITIONS) {
     const investment = pos.quotaCount * QUOTA_UNIT_BRL;
