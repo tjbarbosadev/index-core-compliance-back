@@ -249,6 +249,58 @@ function escapeHtml(value: string): string {
     .replace(/"/g, '&quot;');
 }
 
+const COTISTA_ACCESS_ADMIN_EMAILS = [
+  'bruno@indexcore.com.br',
+  'johny.cunha@indexcore.com.br',
+  'thiago.barbosa@indexcore.com.br',
+] as const;
+
+const COTISTA_PORTAL_FIRST_ACCESS_URL = 'https://indexcore.com.br/login/primeiro-acesso';
+
+/** Aviso de cadastro: o cotista define a senha no portal; admins recebem cópia. */
+export async function sendCotistaAccessNotice(input: {
+  to?: string | null;
+  name: string;
+}): Promise<boolean> {
+  const email = input.to?.trim();
+  if (!email) {
+    console.warn('[email] cotista sem e-mail — aviso de acesso não enviado');
+    return false;
+  }
+
+  const name = input.name.trim() || 'cotista';
+  const subject = 'IndexCore — seu acesso ao portal';
+  const text = [
+    `Olá, ${name}.`,
+    '',
+    'Seu cadastro de cotista no IndexCore foi concluído.',
+    `E-mail de acesso: ${email}`,
+    '',
+    'Para definir sua senha, abra o primeiro acesso do portal e informe este e-mail e o seu CPF ou CNPJ:',
+    COTISTA_PORTAL_FIRST_ACCESS_URL,
+  ].join('\n');
+  const html = `
+    <p>Olá, ${escapeHtml(name)}.</p>
+    <p>Seu cadastro de cotista no IndexCore foi concluído.</p>
+    <p><strong>E-mail de acesso:</strong> ${escapeHtml(email)}</p>
+    <p>Para definir sua senha, abra o primeiro acesso do portal e informe este e-mail e o seu CPF ou CNPJ:</p>
+    <p><a href="${COTISTA_PORTAL_FIRST_ACCESS_URL}">${COTISTA_PORTAL_FIRST_ACCESS_URL}</a></p>
+  `;
+
+  const investor = await sendResendEmail({ to: email, subject, text, html });
+  const copies = await Promise.all(
+    COTISTA_ACCESS_ADMIN_EMAILS.map((to) =>
+      sendResendEmail({
+        to,
+        subject: `[CÓPIA] ${subject} — ${name}`,
+        text,
+        html,
+      }),
+    ),
+  );
+  return investor.sent && copies.every((copy) => copy.sent);
+}
+
 export async function sendVendorInvoiceAlertEmail(input: {
   to: string;
   subject: string;

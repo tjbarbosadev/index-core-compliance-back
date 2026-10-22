@@ -2,6 +2,7 @@ import type { OnboardingKind, PartyType, Prisma, QuotaType } from '@prisma/clien
 import { prisma } from '../db/index.js';
 import { APP_ERROR } from '../lib/errors.js';
 import { digitsOnly, findActivePartyByCpfCnpj } from '../lib/party.js';
+import { sendCotistaAccessNotice } from './email.service.js';
 import { logAudit } from './audit.service.js';
 import { mapCotistaFull } from './cotista.service.js';
 
@@ -556,8 +557,23 @@ export async function confirmDeposit(input: ConfirmDepositInput, userId: string,
     console.warn('[onboarding.confirmDeposit] fragmented alert failed (non-fatal):', err);
   }
 
+  const contacts = await prisma.partyContact.findMany({
+    where: { partyId: process.partyId },
+  });
+  const contact = contacts.find((c) => c.isPrimary && c.email) ?? contacts.find((c) => c.email);
+
+  let accessEmailSent = false;
+  try {
+    accessEmailSent = await sendCotistaAccessNotice({
+      to: contact?.email,
+      name: process.party.legalName,
+    });
+  } catch (err) {
+    console.error('[onboarding.confirmDeposit] falha ao disparar e-mail de acesso:', err);
+  }
+
   const cotista = await mapCotistaFull(cotistaId);
-  return { cotista };
+  return { cotista: { ...cotista, accessEmailSent } };
 }
 
 export async function rejectOnboarding(

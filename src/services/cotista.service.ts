@@ -1,6 +1,7 @@
 import { prisma } from '../db/index.js';
 import { APP_ERROR } from '../lib/errors.js';
 import { digitsOnly, findActivePartyByCpfCnpj } from '../lib/party.js';
+import { sendCotistaAccessNotice } from './email.service.js';
 import { hasPermissionInList } from './permission.service.js';
 import { logAudit } from './audit.service.js';
 import { getVisualizationDate, parseYYYYMMDD, toYYYYMMDD } from './quota-calculator.js';
@@ -608,7 +609,18 @@ export async function createCotista(input: CotistaWriteInput, userId: string, ip
 
   await backfillYieldsForCotista(createdId);
 
-  return mapCotistaFull(createdId);
+  let accessEmailSent = false;
+  try {
+    accessEmailSent = await sendCotistaAccessNotice({
+      to: input.email,
+      name: legalName,
+    });
+  } catch (err) {
+    console.error('[cotista] falha ao disparar e-mail de acesso:', err);
+  }
+
+  const cotista = await mapCotistaFull(createdId);
+  return { ...cotista, accessEmailSent };
 }
 
 export async function updateCotista(
