@@ -7,6 +7,7 @@ import {
 } from '../services/partner.service.js';
 import * as cotistaService from '../services/cotista.service.js';
 import * as fundService from '../services/fund.service.js';
+import { registerFimPartnerRoutes } from './fim-partner.routes.js';
 import { getVisualizationDate, toYYYYMMDD } from '../services/quota-calculator.js';
 
 type PartnerRequest = Request & { partner?: AuthenticatedPartner };
@@ -91,6 +92,15 @@ async function requirePartner(req: PartnerRequest, res: Response, next: NextFunc
   next();
 }
 
+/** Token com escopo explícito não herda as rotas /v1 antigas. */
+function requireLegacyPartner(req: PartnerRequest, res: Response, next: NextFunction) {
+  if ((req.partner?.scopes.length ?? 0) > 0) {
+    res.status(403).json({ error: 'Escopo ausente' });
+    return;
+  }
+  next();
+}
+
 function logPartnerAccess(req: PartnerRequest, res: Response, next: NextFunction) {
   const partnerId = req.partner?.id;
   if (!partnerId) {
@@ -124,84 +134,122 @@ function positionIdQuery(req: Request): string | undefined {
 }
 
 export function registerV1Routes(app: Express) {
-  app.get('/v1/fundos', requirePartner, logPartnerAccess, async (_req, res) => {
-    try {
-      const funds = await fundService.listPartnerFunds();
-      res.json({ funds });
-    } catch (err) {
-      console.error('[v1/fundos]', err);
-      res.status(500).json({ error: 'Erro ao listar fundos' });
-    }
-  });
+  registerFimPartnerRoutes(app, { requirePartner, logPartnerAccess });
 
-  app.get('/v1/fundos/:id', requirePartner, logPartnerAccess, async (req, res) => {
-    try {
-      const fund = await fundService.getPartnerFundById(req.params.id);
-      if (!fund) {
-        res.status(404).json({ error: 'Fundo não encontrado' });
-        return;
+  app.get(
+    '/v1/fundos',
+    requirePartner,
+    logPartnerAccess,
+    requireLegacyPartner,
+    async (_req, res) => {
+      try {
+        const funds = await fundService.listPartnerFunds();
+        res.json({ funds });
+      } catch (err) {
+        console.error('[v1/fundos]', err);
+        res.status(500).json({ error: 'Erro ao listar fundos' });
       }
-      res.json(fund);
-    } catch (err) {
-      console.error('[v1/fundos/:id]', err);
-      res.status(500).json({ error: 'Erro ao obter fundo' });
-    }
-  });
+    },
+  );
 
-  app.get('/v1/cotistas', requirePartner, logPartnerAccess, async (_req, res) => {
-    try {
-      const list = await cotistaService.listCotistas(['cotistas.view_kyc'], true);
-      const items = await Promise.all(
-        list.map(async (c) => {
-          if (!('riskLevel' in c)) return null;
-          const full = await cotistaService.mapCotistaFull(c.id);
-          return toPublicCotista(full);
-        }),
-      );
-      res.json({
-        visualizationDate: toYYYYMMDD(getVisualizationDate()),
-        clients: items.filter(Boolean),
-      });
-    } catch (err) {
-      console.error('[v1/cotistas]', err);
-      res.status(500).json({ error: 'Erro ao listar cotistas' });
-    }
-  });
+  app.get(
+    '/v1/fundos/:id',
+    requirePartner,
+    logPartnerAccess,
+    requireLegacyPartner,
+    async (req, res) => {
+      try {
+        const fund = await fundService.getPartnerFundById(req.params.id);
+        if (!fund) {
+          res.status(404).json({ error: 'Fundo não encontrado' });
+          return;
+        }
+        res.json(fund);
+      } catch (err) {
+        console.error('[v1/fundos/:id]', err);
+        res.status(500).json({ error: 'Erro ao obter fundo' });
+      }
+    },
+  );
 
-  app.get('/v1/cotistas/:id', requirePartner, logPartnerAccess, async (req, res) => {
-    try {
-      const full = await cotistaService.mapCotistaFull(req.params.id);
-      res.json(toPublicCotista(full));
-    } catch (err) {
-      console.error('[v1/cotistas/:id]', err);
-      res.status(404).json({ error: 'Cotista não encontrado' });
-    }
-  });
+  app.get(
+    '/v1/cotistas',
+    requirePartner,
+    logPartnerAccess,
+    requireLegacyPartner,
+    async (_req, res) => {
+      try {
+        const list = await cotistaService.listCotistas(['cotistas.view_kyc'], true);
+        const items = await Promise.all(
+          list.map(async (c) => {
+            if (!('riskLevel' in c)) return null;
+            const full = await cotistaService.mapCotistaFull(c.id);
+            return toPublicCotista(full);
+          }),
+        );
+        res.json({
+          visualizationDate: toYYYYMMDD(getVisualizationDate()),
+          clients: items.filter(Boolean),
+        });
+      } catch (err) {
+        console.error('[v1/cotistas]', err);
+        res.status(500).json({ error: 'Erro ao listar cotistas' });
+      }
+    },
+  );
 
-  app.get('/v1/cotistas/:id/yields', requirePartner, logPartnerAccess, async (req, res) => {
-    try {
-      const result = await cotistaService.getCotistaYields(req.params.id, {
-        date: typeof req.query.date === 'string' ? req.query.date : undefined,
-        limit: req.query.limit ? Number(req.query.limit) : 90,
-        partyFundLinkId: positionIdQuery(req),
-      });
-      res.json(result);
-    } catch (err) {
-      console.error('[v1/cotistas/:id/yields]', err);
-      res.status(500).json({ error: 'Erro ao listar rendimentos' });
-    }
-  });
+  app.get(
+    '/v1/cotistas/:id',
+    requirePartner,
+    logPartnerAccess,
+    requireLegacyPartner,
+    async (req, res) => {
+      try {
+        const full = await cotistaService.mapCotistaFull(req.params.id);
+        res.json(toPublicCotista(full));
+      } catch (err) {
+        console.error('[v1/cotistas/:id]', err);
+        res.status(404).json({ error: 'Cotista não encontrado' });
+      }
+    },
+  );
 
-  app.get('/v1/cotistas/:id/amortizations', requirePartner, logPartnerAccess, async (req, res) => {
-    try {
-      const items = await cotistaService.getCotistaAmortizations(
-        req.params.id,
-        positionIdQuery(req),
-      );
-      res.json({ items });
-    } catch (err) {
-      console.error('[v1/cotistas/:id/amortizations]', err);
-      res.status(500).json({ error: 'Erro ao listar amortizações' });
-    }
-  });
+  app.get(
+    '/v1/cotistas/:id/yields',
+    requirePartner,
+    logPartnerAccess,
+    requireLegacyPartner,
+    async (req, res) => {
+      try {
+        const result = await cotistaService.getCotistaYields(req.params.id, {
+          date: typeof req.query.date === 'string' ? req.query.date : undefined,
+          limit: req.query.limit ? Number(req.query.limit) : 90,
+          partyFundLinkId: positionIdQuery(req),
+        });
+        res.json(result);
+      } catch (err) {
+        console.error('[v1/cotistas/:id/yields]', err);
+        res.status(500).json({ error: 'Erro ao listar rendimentos' });
+      }
+    },
+  );
+
+  app.get(
+    '/v1/cotistas/:id/amortizations',
+    requirePartner,
+    logPartnerAccess,
+    requireLegacyPartner,
+    async (req, res) => {
+      try {
+        const items = await cotistaService.getCotistaAmortizations(
+          req.params.id,
+          positionIdQuery(req),
+        );
+        res.json({ items });
+      } catch (err) {
+        console.error('[v1/cotistas/:id/amortizations]', err);
+        res.status(500).json({ error: 'Erro ao listar amortizações' });
+      }
+    },
+  );
 }

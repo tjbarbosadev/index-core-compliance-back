@@ -9,6 +9,14 @@ export const QUOTA_CONFIG = {
 
 export type YieldQuotaType = keyof typeof QUOTA_CONFIG;
 
+/** Projeção da meta do NEXT CORE II FIM: 120% da variação diária, base 252. */
+export const FIM_CDI_MULTIPLIER = 1.2;
+export const FIM_BUSINESS_DAYS_PER_YEAR = 252;
+export const FIM_COME_COTAS_RATE = 0.15;
+export const FIM_YIELD_CHUNK_DAYS = 30;
+
+export type StoredQuotaType = YieldQuotaType | 'unica';
+
 const INCOME_TAX_TABLE = [
   { upTo: 180, rate: 0.225 },
   { upTo: 360, rate: 0.2 },
@@ -228,8 +236,233 @@ export function generateDailyYields(params: {
   return results;
 }
 
-export function mapDataJsonQuota(quota: string): YieldQuotaType {
+export function isWeekday(date: Date): boolean {
+  const weekday = date.getUTCDay();
+  return weekday !== 0 && weekday !== 6;
+}
+
+/** Fator de um dia útil: 120% da variação da SELIC já líquida de 0,1 p.p. (base 252). */
+export function fimDailyFactor(selicFactorAnual: number): number {
+  const dailySelic = Math.pow(selicFactorAnual, 1 / FIM_BUSINESS_DAYS_PER_YEAR) - 1;
+  return 1 + FIM_CDI_MULTIPLIER * dailySelic;
+}
+
+/** Último dia de semana do mês (mês 1–12). Sem calendário de feriado. */
+export function lastWeekdayOfMonth(year: number, month: number): string {
+  const date = new Date(Date.UTC(year, month, 0, 12));
+  while (!isWeekday(date)) {
+    date.setUTCDate(date.getUTCDate() - 1);
+  }
+  return toYYYYMMDD(date);
+}
+
+/** Come-cotas no último dia útil de maio e de novembro. */
+export function isFimComeCotasDay(dateStr: string): boolean {
+  const date = parseYYYYMMDD(dateStr);
+  const month = date.getUTCMonth() + 1;
+  if (month !== 5 && month !== 11) return false;
+  return dateStr === lastWeekdayOfMonth(date.getUTCFullYear(), month);
+}
+
+export type FimYieldState = {
+  balance: number;
+  taxBasis: number;
+  yieldAccumulated: number;
+};
+
+/** Aporte datado. Entra no saldo depois do rendimento e do come-cotas do dia. */
+export type FimContribution = { date: string; amount: number };
+
+function contributionTotal(items: FimContribution[], upTo: string): number {
+  let total = 0;
+  for (const item of items) {
+    if (item.date <= upTo) total += item.amount;
+  }
+  return total;
+}
+
+function contributionOn(items: FimContribution[], date: string): number {
+  let total = 0;
+  for (const item of items) {
+    if (item.date === date) total += item.amount;
+  }
+  return total;
+}
+
+/**
+ * Projeta um trecho do FIM a partir do saldo de abertura.
+ * O primeiro dia só não rende quando `accrueFromFirstDay` é falso (data de cotização).
+ * Come-cotas reduz o saldo e a base que segue rendendo.
+ * Com `contributions`, cada aporte soma no principal só a partir do próprio dia.
+ */
+export function generateFimYieldChunk(params: {
+  investment: number;
+  fromDate: string;
+  endDate: string;
+  opening: FimYieldState;
+  accrueFromFirstDay: boolean;
+  getSelicForDate: (dateStr: string) => SelicLookup;
+  contributions?: FimContribution[];
+}): { days: DayYieldResult[]; closing: FimYieldState } {
+  const {
+    investment,
+    fromDate,
+    endDate,
+    opening,
+    accrueFromFirstDay,
+    getSelicForDate,
+    contributions,
+  } = params;
+  if (fromDate > endDate) {
+    return { days: [], closing: opening };
+  }
+
+  if (contributions && contributions.length > 0) {
+    return generateFimYieldChunkFromContributions({
+      contributions,
+      fromDate,
+      endDate,
+      opening,
+      accrueFromFirstDay,
+      getSelicForDate,
+    });
+  }
+
+  const days: DayYieldResult[] = [];
+  let balance = opening.balance;
+  let taxBasis = opening.taxBasis;
+  let yieldAccumulated = opening.yieldAccumulated;
+  let previous = opening.balance;
+
+  for (let d = parseYYYYMMDD(fromDate); toYYYYMMDD(d) <= endDate; d = addDays(d, 1)) {
+    const dateStr = toYYYYMMDD(d);
+    const selic = getSelicForDate(dateStr);
+    const isContractStart = dateStr === fromDate && !accrueFromFirstDay;
+
+    let yieldDay = 0;
+    let hadWithdraw = false;
+    let withdrawAmount: number | null = null;
+
+    if (isContractStart) {
+      balance = investment;
+      taxBasis = investment;
+      yieldAccumulated = 0;
+      yieldDay = 0;
+    } else {
+      if (isWeekday(d)) {
+        balance *= fimDailyFactor(selic.selicFactor);
+      }
+      if (isFimComeCotasDay(dateStr)) {
+        const gain = balance - taxBasis;
+        if (gain > 0) {
+          withdrawAmount = gain * FIM_COME_COTAS_RATE;
+          balance -= withdrawAmount;
+          taxBasis = balance;
+          hadWithdraw = true;
+        }
+      }
+      yieldDay = balance - previous;
+      yieldAccumulated = balance - investment;
+    }
+
+    previous = balance;
+    days.push({
+      referenceDate: dateStr,
+      selicAnual: selic.selicAnual,
+      selicFactor: selic.selicFactor,
+      principal: investment,
+      yieldDay,
+      yieldAccumulated,
+      balanceTotal: balance,
+      hadWithdraw,
+      withdrawAmount,
+    });
+  }
+
+  const closing: FimYieldState = { balance, taxBasis, yieldAccumulated };
+  return { days, closing };
+}
+
+function generateFimYieldChunkFromContributions(params: {
+  contributions: FimContribution[];
+  fromDate: string;
+  endDate: string;
+  opening: FimYieldState;
+  accrueFromFirstDay: boolean;
+  getSelicForDate: (dateStr: string) => SelicLookup;
+}): { days: DayYieldResult[]; closing: FimYieldState } {
+  const { contributions, fromDate, endDate, opening, accrueFromFirstDay, getSelicForDate } = params;
+  const days: DayYieldResult[] = [];
+  let balance = opening.balance;
+  let taxBasis = opening.taxBasis;
+  let yieldAccumulated = opening.yieldAccumulated;
+  let previous = opening.balance;
+
+  for (let d = parseYYYYMMDD(fromDate); toYYYYMMDD(d) <= endDate; d = addDays(d, 1)) {
+    const dateStr = toYYYYMMDD(d);
+    const selic = getSelicForDate(dateStr);
+    const isContractStart = dateStr === fromDate && !accrueFromFirstDay;
+    const principal = contributionTotal(contributions, dateStr);
+    let yieldDay = 0;
+    let hadWithdraw = false;
+    let withdrawAmount: number | null = null;
+
+    if (isContractStart) {
+      balance = principal;
+      taxBasis = principal;
+      yieldAccumulated = 0;
+      yieldDay = 0;
+    } else {
+      if (isWeekday(d)) {
+        balance *= fimDailyFactor(selic.selicFactor);
+      }
+      if (isFimComeCotasDay(dateStr)) {
+        const gain = balance - taxBasis;
+        if (gain > 0) {
+          withdrawAmount = gain * FIM_COME_COTAS_RATE;
+          balance -= withdrawAmount;
+          taxBasis = balance;
+          hadWithdraw = true;
+        }
+      }
+      yieldDay = balance - previous;
+      const added = contributionOn(contributions, dateStr);
+      if (added > 0) {
+        balance += added;
+        taxBasis += added;
+      }
+      yieldAccumulated = balance - principal;
+    }
+
+    previous = balance;
+    days.push({
+      referenceDate: dateStr,
+      selicAnual: selic.selicAnual,
+      selicFactor: selic.selicFactor,
+      principal,
+      yieldDay,
+      yieldAccumulated,
+      balanceTotal: balance,
+      hadWithdraw,
+      withdrawAmount,
+    });
+  }
+
+  return { days, closing: { balance, taxBasis, yieldAccumulated } };
+}
+
+export function fimChunkEnd(
+  fromDate: string,
+  endDate: string,
+  chunkDays = FIM_YIELD_CHUNK_DAYS,
+): string {
+  const candidate = toYYYYMMDD(addDays(parseYYYYMMDD(fromDate), chunkDays - 1));
+  return candidate < endDate ? candidate : endDate;
+}
+
+export function mapDataJsonQuota(quota: string): StoredQuotaType {
   if (quota === 'sri' || quota === 'senior_i' || quota === 'jr') return 'senior_i';
   if (quota === 'srii' || quota === 'senior_ii' || quota === 'sr') return 'senior_ii';
+  if (quota === 'unica' || quota === 'fim') return 'unica';
   throw new Error(`Tipo de cota desconhecido: ${quota}`);
 }

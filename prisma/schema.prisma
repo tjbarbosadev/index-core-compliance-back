@@ -136,6 +136,7 @@ enum AmortizationKind {
   mensal
   final
   manual
+  come_cotas
 
   @@map("amortization_kind")
 }
@@ -593,10 +594,11 @@ model PartyFundLink {
   contractEndDate    DateTime? @map("contract_end_date") @db.Date
   linkedAt           DateTime  @default(now()) @map("linked_at") @db.Timestamptz
 
-  party          Party                 @relation(fields: [partyId], references: [id], onDelete: Cascade)
-  fund           Fund                  @relation(fields: [fundId], references: [id], onDelete: Cascade)
-  dailyYields    CotistaDailyYield[]
-  amortizations  CotistaAmortization[]
+  party            Party                 @relation(fields: [partyId], references: [id], onDelete: Cascade)
+  fund             Fund                  @relation(fields: [fundId], references: [id], onDelete: Cascade)
+  dailyYields      CotistaDailyYield[]
+  amortizations    CotistaAmortization[]
+  fimSubscriptions FimSubscription[]
 
   @@index([partyId])
   @@index([fundId])
@@ -650,6 +652,24 @@ model CotistaAmortization {
 
   @@index([partyFundLinkId, occurredOn])
   @@map("cotista_amortizations")
+}
+
+/** Visual FIM application from a partner. Not a settled payment. */
+model FimSubscription {
+  id              String   @id @default(uuid()) @db.Uuid
+  partyFundLinkId String   @map("party_fund_link_id") @db.Uuid
+  partnerId       String   @map("partner_id") @db.Uuid
+  externalId      String   @map("external_id") @db.VarChar(128)
+  amount          Decimal  @db.Decimal(18, 2)
+  occurredOn      DateTime @map("occurred_on") @db.Date
+  createdAt       DateTime @default(now()) @map("created_at") @db.Timestamptz
+
+  partyFundLink PartyFundLink @relation(fields: [partyFundLinkId], references: [id], onDelete: Cascade)
+  partner       ApiPartner    @relation(fields: [partnerId], references: [id], onDelete: Restrict)
+
+  @@unique([partnerId, externalId])
+  @@index([partyFundLinkId, occurredOn])
+  @@map("fim_subscriptions")
 }
 
 // ============================================================================
@@ -883,11 +903,14 @@ model ApiPartner {
   previousTokenHash       String?   @map("previous_token_hash") @db.VarChar(64)
   previousTokenValidUntil DateTime? @map("previous_token_valid_until") @db.Timestamptz
   rateLimitRpm            Int       @default(120) @map("rate_limit_rpm")
+  /** Empty keeps legacy access to existing /v1 routes and blocks /v1/fim. */
+  scopes                  String[]  @default([])
   active                  Boolean   @default(true)
   createdAt               DateTime  @default(now()) @map("created_at") @db.Timestamptz
   rotatedAt               DateTime? @map("rotated_at") @db.Timestamptz
 
-  requestLogs ApiPartnerRequestLog[]
+  requestLogs      ApiPartnerRequestLog[]
+  fimSubscriptions FimSubscription[]
 
   @@index([tokenHash])
   @@index([previousTokenHash])

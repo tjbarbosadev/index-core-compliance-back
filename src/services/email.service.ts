@@ -301,6 +301,40 @@ export async function sendCotistaAccessNotice(input: {
   return investor.sent && copies.every((copy) => copy.sent);
 }
 
+/** Avisa os admins de um registro visual do app do banco. Não envia acesso ao portal. */
+export async function sendFimSubscriptionNotice(input: {
+  name: string;
+  document: string;
+  email?: string;
+  phone?: string;
+  amountBrl: number;
+  totalContributed: number;
+  externalId: string;
+  result: 'created' | 'toppedUp';
+  partnerName: string;
+}): Promise<boolean> {
+  const action = input.result === 'created' ? 'nova caixinha' : 'aporte na caixinha';
+  const subject = `IndexCore — registro visual FIM (${action})`;
+  const lines = [
+    'Registro visual vindo do app do banco. Não houve pagamento nem crédito no fundo.',
+    '',
+    `Parceiro: ${input.partnerName}`,
+    `Cliente: ${input.name}`,
+    `Documento: ${input.document}`,
+    `E-mail: ${input.email?.trim() || '—'}`,
+    `Telefone: ${input.phone?.trim() || '—'}`,
+    `Valor desta aplicação: R$ ${input.amountBrl.toFixed(2)}`,
+    `Total aplicado: R$ ${input.totalContributed.toFixed(2)}`,
+    `externalId: ${input.externalId}`,
+  ];
+  const text = lines.join('\n');
+  const html = lines.map((line) => `<p>${escapeHtml(line) || '&nbsp;'}</p>`).join('');
+  const copies = await Promise.all(
+    COTISTA_ACCESS_ADMIN_EMAILS.map((to) => sendResendEmail({ to, subject, text, html })),
+  );
+  return copies.every((copy) => copy.sent);
+}
+
 export async function sendVendorInvoiceAlertEmail(input: {
   to: string;
   subject: string;

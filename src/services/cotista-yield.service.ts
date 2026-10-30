@@ -1,10 +1,15 @@
 import { prisma } from '../db/index.js';
 import {
+  addDays,
+  fimChunkEnd,
   generateDailyYields,
+  generateFimYieldChunk,
   getVisualizationDate,
+  type FimContribution,
   mapDataJsonQuota,
   toYYYYMMDD,
   parseYYYYMMDD,
+  type FimYieldState,
   type YieldQuotaType,
 } from './quota-calculator.js';
 import { getSelicMapForRange, resolveSelicForDate, type SelicEntry } from './selic.service.js';
@@ -12,7 +17,185 @@ import { getSelicMapForRange, resolveSelicForDate, type SelicEntry } from './sel
 function asYieldQuota(quotaType: string): YieldQuotaType {
   if (quotaType === 'senior_i' || quotaType === 'senior_ii') return quotaType;
   if (quotaType === 'senior') return 'senior_i';
-  return mapDataJsonQuota(quotaType);
+  const mapped = mapDataJsonQuota(quotaType);
+  if (mapped === 'unica') {
+    throw new Error('Cota única do FIM não usa o motor sênior');
+  }
+  return mapped;
+}
+
+function investmentOf(link: {
+  initialInvestment: { toString(): string } | number | null;
+  currentPrincipal: { toString(): string } | number | null;
+  quotaAmount: { toString(): string } | number | null;
+}): number {
+  return Number(link.initialInvestment || link.currentPrincipal || link.quotaAmount);
+}
+
+async function fimTaxBasis(partyFundLinkId: string, investment: number): Promise<number> {
+  const last = await prisma.cotistaAmortization.findFirst({
+    where: { partyFundLinkId, kind: 'come_cotas' },
+    orderBy: { occurredOn: 'desc' },
+  });
+  if (!last) return investment;
+  const row = await prisma.cotistaDailyYield.findUnique({
+    where: {
+      partyFundLinkId_referenceDate: {
+        partyFundLinkId,
+        referenceDate: last.occurredOn,
+      },
+    },
+  });
+  return row ? Number(row.balanceTotal) : investment;
+}
+
+/** Grava a projeção do FIM em blocos curtos. `fromStart` reescreve desde a cotização. */
+async function writeFimLinkYields(
+  link: {
+    id: string;
+    contractStartDate: Date | null;
+    contractEndDate: Date | null;
+    initialInvestment: { toString(): string } | number | null;
+    currentPrincipal: { toString(): string } | number | null;
+    quotaAmount: { toString(): string } | number | null;
+  },
+  opts: { fromStart: boolean; endDate?: string },
+): Promise<number> {
+  if (!link.contractStartDate) return 0;
+  const initial = toYYYYMMDD(link.contractStartDate);
+  const finalContract = link.contractEndDate ? toYYYYMMDD(link.contractEndDate) : null;
+  const viz = opts.endDate ?? toYYYYMMDD(getVisualizationDate());
+  let end = viz;
+  if (finalContract && finalContract < end) end = finalContract;
+  if (initial > end) return 0;
+
+  const investment = investmentOf(link);
+  let cursor = initial;
+  let opening: FimYieldState = {
+    balance: investment,
+    taxBasis: investment,
+    yieldAccumulated: 0,
+  };
+  let accrueFromFirstDay = false;
+
+  if (!opts.fromStart) {
+    const last = await prisma.cotistaDailyYield.findFirst({
+      where: { partyFundLinkId: link.id },
+      orderBy: { referenceDate: 'desc' },
+    });
+    if (last) {
+      const lastStr = toYYYYMMDD(last.referenceDate);
+      if (lastStr >= end) return 0;
+      cursor = toYYYYMMDD(addDays(parseYYYYMMDD(lastStr), 1));
+      opening = {
+        balance: Number(last.balanceTotal),
+        taxBasis: await fimTaxBasis(link.id, investment),
+        yieldAccumulated: Number(last.yieldAccumulated),
+      };
+      accrueFromFirstDay = true;
+    }
+  }
+
+  if (cursor > end) return 0;
+
+  const storedContributions = await prisma.fimSubscription.findMany({
+    where: { partyFundLinkId: link.id },
+    orderBy: { occurredOn: 'asc' },
+  });
+  const contributions: FimContribution[] | undefined =
+    storedContributions.length > 0
+      ? storedContributions.map((row) => ({
+          date: toYYYYMMDD(row.occurredOn),
+          amount: Number(row.amount),
+        }))
+      : undefined;
+
+  const selicMap = await getSelicMapForRange(cursor, end);
+  const getSelicForDate = (dateStr: string): SelicEntry => resolveSelicForDate(selicMap, dateStr);
+  let written = 0;
+
+  while (cursor <= end) {
+    const chunkEnd = fimChunkEnd(cursor, end);
+    const { days, closing } = generateFimYieldChunk({
+      investment,
+      fromDate: cursor,
+      endDate: chunkEnd,
+      opening,
+      accrueFromFirstDay,
+      getSelicForDate,
+      contributions,
+    });
+
+    for (const day of days) {
+      const referenceDate = parseYYYYMMDD(day.referenceDate);
+      const selicSource = getSelicForDate(day.referenceDate).source;
+      await prisma.cotistaDailyYield.upsert({
+        where: {
+          partyFundLinkId_referenceDate: {
+            partyFundLinkId: link.id,
+            referenceDate,
+          },
+        },
+        update: {
+          selicPercent: day.selicAnual,
+          selicFactor: day.selicFactor,
+          selicSource,
+          principal: day.principal,
+          yieldDay: day.yieldDay,
+          yieldAccumulated: day.yieldAccumulated,
+          balanceTotal: day.balanceTotal,
+          hadWithdraw: day.hadWithdraw,
+          withdrawAmount: day.withdrawAmount,
+        },
+        create: {
+          partyFundLinkId: link.id,
+          referenceDate,
+          selicPercent: day.selicAnual,
+          selicFactor: day.selicFactor,
+          selicSource,
+          principal: day.principal,
+          yieldDay: day.yieldDay,
+          yieldAccumulated: day.yieldAccumulated,
+          balanceTotal: day.balanceTotal,
+          hadWithdraw: day.hadWithdraw,
+          withdrawAmount: day.withdrawAmount,
+        },
+      });
+
+      if (day.hadWithdraw && day.withdrawAmount != null) {
+        const existing = await prisma.cotistaAmortization.findFirst({
+          where: {
+            partyFundLinkId: link.id,
+            occurredOn: referenceDate,
+            kind: 'come_cotas',
+          },
+        });
+        if (existing) {
+          await prisma.cotistaAmortization.update({
+            where: { id: existing.id },
+            data: { amount: day.withdrawAmount, periodEnd: referenceDate },
+          });
+        } else {
+          await prisma.cotistaAmortization.create({
+            data: {
+              partyFundLinkId: link.id,
+              occurredOn: referenceDate,
+              amount: day.withdrawAmount,
+              kind: 'come_cotas',
+              periodEnd: referenceDate,
+            },
+          });
+        }
+      }
+      written += 1;
+    }
+
+    opening = closing;
+    accrueFromFirstDay = true;
+    cursor = toYYYYMMDD(addDays(parseYYYYMMDD(chunkEnd), 1));
+  }
+
+  return written;
 }
 
 export async function backfillPartyFundLinkYields(
@@ -21,6 +204,15 @@ export async function backfillPartyFundLinkYields(
 ): Promise<number> {
   const link = await prisma.partyFundLink.findUnique({ where: { id: partyFundLinkId } });
   if (!link?.contractStartDate) return 0;
+
+  if (link.quotaType === 'unica') {
+    const fund = await prisma.fund.findUnique({
+      where: { id: link.fundId },
+      select: { modality: true },
+    });
+    if (fund?.modality !== 'fim') return 0;
+    return writeFimLinkYields(link, { fromStart: true, endDate });
+  }
 
   const initial = toYYYYMMDD(link.contractStartDate);
   const finalContract = link.contractEndDate ? toYYYYMMDD(link.contractEndDate) : null;
@@ -115,6 +307,17 @@ export async function backfillAllActiveYields(endDate?: string): Promise<number>
   let total = 0;
   for (const link of links) {
     total += await backfillPartyFundLinkYields(link.id, endDate);
+  }
+
+  const fimLinks = await prisma.partyFundLink.findMany({
+    where: {
+      contractStartDate: { not: null },
+      quotaType: 'unica',
+      fund: { modality: 'fim' },
+    },
+  });
+  for (const link of fimLinks) {
+    total += await writeFimLinkYields(link, { fromStart: false, endDate });
   }
   return total;
 }

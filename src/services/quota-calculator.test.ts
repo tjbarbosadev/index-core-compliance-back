@@ -2,8 +2,12 @@ import { describe, expect, it } from 'vitest';
 import {
   applyIncomeTax,
   calculateCompoundAmount,
+  fimChunkEnd,
+  fimDailyFactor,
   generateDailyYields,
+  generateFimYieldChunk,
   getVisualizationDate,
+  isFimComeCotasDay,
   isSeniorIAmortizationDay,
   mapDataJsonQuota,
   parseYYYYMMDD,
@@ -12,6 +16,7 @@ import {
   tomorrowYYYYMMDD,
   addDays,
   SELIC_SPREAD_PP,
+  FIM_YIELD_CHUNK_DAYS,
 } from './quota-calculator.js';
 import { resolveSelicForDate, type SelicEntry } from './selic.service.js';
 
@@ -164,6 +169,144 @@ describe('isSeniorIAmortizationDay', () => {
     expect(isSeniorIAmortizationDay(start, datePlus(60))).toBe(true);
     expect(isSeniorIAmortizationDay(start, datePlus(120))).toBe(true);
     expect(isSeniorIAmortizationDay(start, datePlus(45))).toBe(false);
+  });
+});
+
+describe('FIM yield projection', () => {
+  const selic = { selicAnual: 14, selicFactor: 1.139 };
+  const opening = { balance: 10_000, taxBasis: 10_000, yieldAccumulated: 0 };
+
+  it('maps unica and fim to the single quota', () => {
+    expect(mapDataJsonQuota('unica')).toBe('unica');
+    expect(mapDataJsonQuota('fim')).toBe('unica');
+  });
+
+  it('applies 120% of the daily SELIC variation on a 252-day base', () => {
+    const dailySelic = Math.pow(1.139, 1 / 252) - 1;
+    expect(fimDailyFactor(1.139)).toBeCloseTo(1 + 1.2 * dailySelic, 12);
+  });
+
+  it('does not accrue on the quotation date', () => {
+    const { days } = generateFimYieldChunk({
+      investment: 10_000,
+      fromDate: '2026-06-01',
+      endDate: '2026-06-01',
+      opening,
+      accrueFromFirstDay: false,
+      getSelicForDate: () => selic,
+    });
+    expect(days).toHaveLength(1);
+    expect(days[0]!.yieldDay).toBe(0);
+    expect(days[0]!.balanceTotal).toBe(10_000);
+    expect(days[0]!.hadWithdraw).toBe(false);
+  });
+
+  it('compounds the next business day and skips the weekend', () => {
+    const { days } = generateFimYieldChunk({
+      investment: 10_000,
+      fromDate: '2026-06-01',
+      endDate: '2026-06-07',
+      opening,
+      accrueFromFirstDay: false,
+      getSelicForDate: () => selic,
+    });
+    const tuesday = days.find((day) => day.referenceDate === '2026-06-02')!;
+    const saturday = days.find((day) => day.referenceDate === '2026-06-06')!;
+    const friday = days.find((day) => day.referenceDate === '2026-06-05')!;
+    expect(tuesday.balanceTotal).toBeCloseTo(10_000 * fimDailyFactor(1.139), 6);
+    expect(saturday.balanceTotal).toBeCloseTo(friday.balanceTotal, 6);
+    expect(saturday.yieldDay).toBeCloseTo(0, 6);
+    expect(days.every((day) => !day.hadWithdraw)).toBe(true);
+  });
+
+  it('withholds 15% come-cotas on the last weekday of May and keeps compounding the net balance', () => {
+    expect(isFimComeCotasDay('2026-05-29')).toBe(true);
+    expect(isFimComeCotasDay('2026-05-30')).toBe(false);
+
+    const { days } = generateFimYieldChunk({
+      investment: 10_000,
+      fromDate: '2026-05-27',
+      endDate: '2026-05-30',
+      opening,
+      accrueFromFirstDay: false,
+      getSelicForDate: () => selic,
+    });
+    const factor = fimDailyFactor(1.139);
+    const beforeTax = 10_000 * factor * factor;
+    const tax = (beforeTax - 10_000) * 0.15;
+    const friday = days.find((day) => day.referenceDate === '2026-05-29')!;
+    const saturday = days.find((day) => day.referenceDate === '2026-05-30')!;
+    expect(friday.hadWithdraw).toBe(true);
+    expect(friday.withdrawAmount).toBeCloseTo(tax, 6);
+    expect(friday.balanceTotal).toBeCloseTo(beforeTax - tax, 6);
+    expect(saturday.balanceTotal).toBeCloseTo(friday.balanceTotal, 6);
+    expect(saturday.hadWithdraw).toBe(false);
+  });
+
+  it('continues a later chunk from the previous closing balance', () => {
+    const first = generateFimYieldChunk({
+      investment: 10_000,
+      fromDate: '2026-05-27',
+      endDate: '2026-05-28',
+      opening,
+      accrueFromFirstDay: false,
+      getSelicForDate: () => selic,
+    });
+    const second = generateFimYieldChunk({
+      investment: 10_000,
+      fromDate: '2026-05-29',
+      endDate: '2026-05-31',
+      opening: first.closing,
+      accrueFromFirstDay: true,
+      getSelicForDate: () => selic,
+    });
+    const whole = generateFimYieldChunk({
+      investment: 10_000,
+      fromDate: '2026-05-27',
+      endDate: '2026-05-31',
+      opening,
+      accrueFromFirstDay: false,
+      getSelicForDate: () => selic,
+    });
+    const joined = [...first.days, ...second.days];
+    expect(joined.map((day) => day.balanceTotal)).toEqual(
+      whole.days.map((day) => day.balanceTotal),
+    );
+    expect(second.days.some((day) => day.hadWithdraw)).toBe(true);
+    expect(fimChunkEnd('2026-05-27', '2026-12-31', FIM_YIELD_CHUNK_DAYS)).toBe('2026-06-25');
+  });
+
+  it('adds a later contribution only from that day and leaves earlier balances unchanged', () => {
+    const withTopUp = generateFimYieldChunk({
+      investment: 10_000,
+      fromDate: '2026-06-01',
+      endDate: '2026-06-03',
+      opening,
+      accrueFromFirstDay: false,
+      getSelicForDate: () => selic,
+      contributions: [
+        { date: '2026-06-01', amount: 10_000 },
+        { date: '2026-06-03', amount: 5_000 },
+      ],
+    });
+    const before = generateFimYieldChunk({
+      investment: 10_000,
+      fromDate: '2026-06-01',
+      endDate: '2026-06-02',
+      opening,
+      accrueFromFirstDay: false,
+      getSelicForDate: () => selic,
+    });
+    const tuesday = withTopUp.days[1]!;
+    const wednesday = withTopUp.days[2]!;
+    expect(withTopUp.days[0]!.balanceTotal).toBe(before.days[0]!.balanceTotal);
+    expect(tuesday.balanceTotal).toBeCloseTo(before.days[1]!.balanceTotal, 6);
+    expect(tuesday.principal).toBe(10_000);
+    expect(wednesday.principal).toBe(15_000);
+    const accrued = tuesday.balanceTotal * fimDailyFactor(1.139);
+    expect(wednesday.yieldDay).toBeCloseTo(accrued - tuesday.balanceTotal, 6);
+    expect(wednesday.balanceTotal).toBeCloseTo(accrued + 5_000, 6);
+    expect(wednesday.yieldAccumulated).toBeCloseTo(wednesday.balanceTotal - 15_000, 6);
   });
 });
 

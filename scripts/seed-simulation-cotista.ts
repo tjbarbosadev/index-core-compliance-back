@@ -154,7 +154,6 @@ export async function ensureSimulationCotista() {
     where: { partyId: party.id, fundId: fund.id },
   });
   for (const link of links) {
-    if (link.quotaType !== 'senior_i' && link.quotaType !== 'senior_ii') continue;
     if (!link.contractStartDate) continue;
     try {
       await backfillPartyFundLinkYields(link.id);

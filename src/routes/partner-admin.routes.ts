@@ -44,6 +44,7 @@ export function registerPartnerAdminRoutes(app: Express) {
         email: true,
         active: true,
         rateLimitRpm: true,
+        scopes: true,
         rotatedAt: true,
         previousTokenValidUntil: true,
         createdAt: true,
@@ -58,6 +59,9 @@ export function registerPartnerAdminRoutes(app: Express) {
     const name = String(req.body?.name ?? '').trim();
     const email = String(req.body?.email ?? '').trim();
     const rateLimitRpm = Number(req.body?.rateLimitRpm ?? 120);
+    const scopes = Array.isArray(req.body?.scopes)
+      ? req.body.scopes.filter((scope: unknown) => typeof scope === 'string')
+      : [];
     if (!name) {
       res.status(400).json({ error: 'name obrigatório' });
       return;
@@ -67,7 +71,7 @@ export function registerPartnerAdminRoutes(app: Express) {
       return;
     }
     try {
-      const result = await createApiPartner({ name, email, rateLimitRpm });
+      const result = await createApiPartner({ name, email, rateLimitRpm, scopes });
       res.status(201).json(result);
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Erro';

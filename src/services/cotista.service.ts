@@ -525,7 +525,6 @@ async function backfillYieldsForCotista(cotistaId: string): Promise<void> {
 
   for (const link of cotista.party.partyFundLinks) {
     if (!link.contractStartDate) continue;
-    if (link.quotaType !== 'senior_i' && link.quotaType !== 'senior_ii') continue;
     try {
       await backfillPartyFundLinkYields(link.id);
     } catch (err) {

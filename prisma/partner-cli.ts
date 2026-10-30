@@ -1,7 +1,7 @@
 /**
  * CLI: criar / rotacionar tokens de parceiros externos.
  *
- *   npm run partner:create -- --name=acme --email=ops@acme.com --rpm=60
+ *   npm run partner:create -- --name=acme --email=ops@acme.com --rpm=60 --scopes=fim.subscriptions.write,fim.shareholders.read
  *   npm run partner:rotate -- --id=<uuid>
  */
 import { createApiPartner, rotatePartnerToken } from '../src/services/partner.service.js';
@@ -21,7 +21,16 @@ async function main() {
     if (!name) throw new Error('Use --name=parceiro');
     if (!email) throw new Error('Use --email=ops@parceiro.com');
     const rpm = Number(arg('rpm') ?? 120);
-    const result = await createApiPartner({ name, email, rateLimitRpm: rpm });
+    const scopes = (arg('scopes') ?? '')
+      .split(',')
+      .map((scope) => scope.trim())
+      .filter(Boolean);
+    const result = await createApiPartner({
+      name,
+      email,
+      rateLimitRpm: rpm,
+      scopes,
+    });
     console.log(JSON.stringify(result, null, 2));
     console.log('\nGuarde o token — ele não será exibido novamente.');
     if (!result.emailSent) {
@@ -50,6 +59,7 @@ async function main() {
         email: true,
         active: true,
         rateLimitRpm: true,
+        scopes: true,
         rotatedAt: true,
         createdAt: true,
       },
@@ -60,7 +70,7 @@ async function main() {
   }
 
   console.log(`Uso:
-  npx tsx prisma/partner-cli.ts create --name=acme --email=ops@acme.com --rpm=60
+  npx tsx prisma/partner-cli.ts create --name=acme --email=ops@acme.com --rpm=60 --scopes=fim.subscriptions.write,fim.shareholders.read
   npx tsx prisma/partner-cli.ts rotate --id=<uuid>
   npx tsx prisma/partner-cli.ts list`);
 }

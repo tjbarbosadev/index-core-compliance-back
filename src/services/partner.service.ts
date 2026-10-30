@@ -3,11 +3,33 @@ import { prisma } from '../db/index.js';
 import { env } from '../lib/env.js';
 import { sendPartnerTokenEmail } from './email.service.js';
 
+export const FIM_SCOPE_SUBSCRIPTIONS_WRITE = 'fim.subscriptions.write';
+export const FIM_SCOPE_SHAREHOLDERS_READ = 'fim.shareholders.read';
+
+export const FIM_PARTNER_SCOPES = [
+  FIM_SCOPE_SUBSCRIPTIONS_WRITE,
+  FIM_SCOPE_SHAREHOLDERS_READ,
+] as const;
+
+export type FimPartnerScope = (typeof FIM_PARTNER_SCOPES)[number];
+
 export type AuthenticatedPartner = {
   id: string;
   name: string;
   rateLimitRpm: number;
+  scopes: string[];
 };
+
+export function normalizePartnerScopes(scopes: string[] | undefined): string[] {
+  if (!scopes?.length) return [];
+  const unique = [...new Set(scopes.map((scope) => scope.trim()).filter(Boolean))];
+  for (const scope of unique) {
+    if (!FIM_PARTNER_SCOPES.includes(scope as FimPartnerScope)) {
+      throw new Error('Escopo desconhecido');
+    }
+  }
+  return unique;
+}
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
@@ -31,6 +53,7 @@ export async function createApiPartner(input: {
   name: string;
   email: string;
   rateLimitRpm?: number;
+  scopes?: string[];
 }): Promise<{
   partner: AuthenticatedPartner & { email: string };
   token: string;
@@ -39,6 +62,7 @@ export async function createApiPartner(input: {
   const name = input.name.trim();
   if (!name) throw new Error('Nome obrigatório');
   const email = normalizeEmail(input.email);
+  const scopes = normalizePartnerScopes(input.scopes);
   const token = generatePartnerToken();
   const row = await prisma.apiPartner.create({
     data: {
@@ -46,6 +70,7 @@ export async function createApiPartner(input: {
       email,
       tokenHash: hashPartnerToken(token),
       rateLimitRpm: input.rateLimitRpm ?? 120,
+      scopes,
       active: true,
     },
   });
@@ -63,6 +88,7 @@ export async function createApiPartner(input: {
       name: row.name,
       email: row.email,
       rateLimitRpm: row.rateLimitRpm,
+      scopes: row.scopes,
     },
     token,
     emailSent,
@@ -87,6 +113,7 @@ export async function authenticatePartnerBearer(
       id: byCurrent.id,
       name: byCurrent.name,
       rateLimitRpm: byCurrent.rateLimitRpm,
+      scopes: byCurrent.scopes,
     };
   }
 
@@ -102,6 +129,7 @@ export async function authenticatePartnerBearer(
       id: byPrevious.id,
       name: byPrevious.name,
       rateLimitRpm: byPrevious.rateLimitRpm,
+      scopes: byPrevious.scopes,
     };
   }
 
