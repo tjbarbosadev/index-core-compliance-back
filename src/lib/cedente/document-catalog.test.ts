@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { pfSigningForm } from './pf-form.js';
 import { cedenteFormFixture } from './cedente-form.fixture.js';
 import {
   buildCedenteDocumentCatalog,
@@ -70,6 +71,25 @@ describe('buildCedenteDocumentCatalog', () => {
       'cartao_assinatura',
       'cartao_assinatura',
     ]);
+  });
+
+  it('uses identity and a PF form for a natural person, without company documents', () => {
+    const form = pfSigningForm({
+      nome: 'Maria Silva',
+      cpf: '52998224725',
+      email: 'maria@example.com',
+      rg: '1234567',
+    });
+    const keys = buildCedenteDocumentCatalog(form).map((s) => s.key);
+    expect(keys).toEqual([
+      'socio-0-identidade',
+      'socio-0-comprovante',
+      'irpf',
+      'extrato-bancario',
+      'ficha-cadastral-pf',
+      'socio-0-cartao-assinatura',
+    ]);
+    expect(keys).not.toContain('contrato-social');
   });
 
   it('requires the power of attorney only for a procurador representative', () => {

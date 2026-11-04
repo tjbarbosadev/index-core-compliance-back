@@ -243,15 +243,16 @@ export async function buildCedenteDocuments(form: Form): Promise<GeneratedCedent
     throw new Error('Informe o representante legal antes de gerar os documentos');
   }
 
+  const isPf = form.partyType === 'pf';
   const fichaTemplate = await loadTemplate('ficha-cadastral-pj.docx');
   const cartaoTemplate = await loadTemplate('cartao-assinatura.docx');
 
   const docs: GeneratedCedenteDocument[] = [
     {
-      slot: 'ficha-cadastral-pj',
+      slot: isPf ? 'ficha-cadastral-pf' : 'ficha-cadastral-pj',
       type: 'ficha_cadastral_pj',
-      title: 'Ficha Cadastral PJ',
-      fileBaseName: 'ficha-cadastral-pj',
+      title: isPf ? 'Ficha Cadastral PF' : 'Ficha Cadastral PJ',
+      fileBaseName: isPf ? 'ficha-cadastral-pf' : 'ficha-cadastral-pj',
       docx: fillDocx(fichaTemplate, fichaCadastralValues(form)),
       signers: [
         { signer: signers[0]!, anchor: CLIENT_ANCHOR },

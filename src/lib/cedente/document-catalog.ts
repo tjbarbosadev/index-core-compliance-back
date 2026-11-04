@@ -71,9 +71,69 @@ export function extractSigners(form: Record<string, unknown>): CedenteSigner[] {
   return people.map((p, index) => ({ ...p, key: `socio-${index}` }));
 }
 
+function buildPfDocumentCatalog(form: Record<string, unknown>): CedenteDocumentSlot[] {
+  const people = extractSigners(form).flatMap<CedenteDocumentSlot>((signer) => [
+    {
+      key: `${signer.key}-identidade`,
+      label: `RG, CNH ou passaporte — ${signer.name}`,
+      type: 'identidade_representante',
+      required: true,
+      source: 'upload',
+    },
+    {
+      key: `${signer.key}-comprovante`,
+      label: `Comprovante de endereço — ${signer.name}`,
+      type: 'comprovante_endereco_representante',
+      required: true,
+      source: 'upload',
+      hint: ADDRESS_HINT,
+    },
+  ]);
+
+  const optional: CedenteDocumentSlot[] = [
+    {
+      key: 'irpf',
+      label: 'Declaração de IRPF do último exercício',
+      type: 'irpf',
+      required: false,
+      source: 'upload',
+    },
+    {
+      key: 'extrato-bancario',
+      label: 'Extrato bancário (últimos 90 dias)',
+      type: 'extrato_bancario',
+      required: false,
+      source: 'upload',
+    },
+  ];
+
+  const generated: CedenteDocumentSlot[] = [
+    {
+      key: 'ficha-cadastral-pf',
+      label: 'Ficha cadastral PF (IndexCore)',
+      type: 'ficha_cadastral_pj',
+      required: true,
+      source: 'generated',
+      hint: 'Gerada pelo sistema e assinada via ZapSign.',
+    },
+    ...extractSigners(form).map<CedenteDocumentSlot>((signer) => ({
+      key: `${signer.key}-cartao-assinatura`,
+      label: `Cartão de assinatura — ${signer.name}`,
+      type: 'cartao_assinatura',
+      required: true,
+      source: 'generated',
+      hint: 'Gerado pelo sistema e assinado via ZapSign.',
+    })),
+  ];
+
+  return [...people, ...optional, ...generated];
+}
+
 export function buildCedenteDocumentCatalog(
   form: Record<string, unknown> = {},
 ): CedenteDocumentSlot[] {
+  if (form.partyType === 'pf') return buildPfDocumentCatalog(form);
+
   const company: CedenteDocumentSlot[] = [
     {
       key: 'contrato-social',

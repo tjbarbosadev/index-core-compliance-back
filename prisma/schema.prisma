@@ -202,6 +202,14 @@ enum CedenteStage {
   @@map("cedente_stage")
 }
 
+enum CedenteContractKind {
+  emprestimo
+  antecipacao
+  outro
+
+  @@map("cedente_contract_kind")
+}
+
 enum LegalReviewDecision {
   favoravel
   pendencia
@@ -694,10 +702,11 @@ model Document {
   rejectionReason String?        @map("rejection_reason")
   createdAt       DateTime       @default(now()) @map("created_at") @db.Timestamptz
 
-  party       Party  @relation(fields: [partyId], references: [id], onDelete: Cascade)
-  uploadedBy  User?  @relation("DocumentUploader", fields: [uploadedById], references: [id])
-  validatedBy User?  @relation("DocumentValidator", fields: [validatedById], references: [id])
-  validations DocumentValidation[]
+  party           Party            @relation(fields: [partyId], references: [id], onDelete: Cascade)
+  uploadedBy      User?            @relation("DocumentUploader", fields: [uploadedById], references: [id])
+  validatedBy     User?            @relation("DocumentValidator", fields: [validatedById], references: [id])
+  validations     DocumentValidation[]
+  cedenteContract CedenteContract?
 
   @@index([partyId])
   @@index([partyId, slot])
@@ -746,6 +755,7 @@ model OnboardingProcess {
   kycReports          KycReport[]
   signatureEnvelopes  SignatureEnvelope[]
   legalReviews        LegalReview[]
+  contracts           CedenteContract[]
 
   @@index([status])
   @@index([kind, status])
@@ -789,6 +799,24 @@ model LegalReview {
 
   @@index([onboardingId, createdAt])
   @@map("legal_reviews")
+}
+
+/** Loan, anticipation, or any other contract belonging to the cedente. */
+model CedenteContract {
+  id           String              @id @default(uuid()) @db.Uuid
+  onboardingId String              @map("onboarding_id") @db.Uuid
+  kind         CedenteContractKind
+  title        String              @db.VarChar(255)
+  notes        String?             @db.Text
+  documentId   String?             @unique @map("document_id") @db.Uuid
+  createdAt    DateTime            @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt    DateTime            @updatedAt @map("updated_at") @db.Timestamptz
+
+  onboarding OnboardingProcess @relation(fields: [onboardingId], references: [id], onDelete: Cascade)
+  document   Document?          @relation(fields: [documentId], references: [id], onDelete: SetNull)
+
+  @@index([onboardingId])
+  @@map("cedente_contracts")
 }
 
 model OnboardingStep {

@@ -103,7 +103,9 @@ export const cedenteOnboardingRouter = router({
   create: permissionProcedure('cedentes.write')
     .input(
       z.object({
-        cnpj: z.string().min(14),
+        partyType: z.enum(['pf', 'pj']).default('pj'),
+        cpf: z.string().min(11).optional(),
+        cnpj: z.string().min(14).optional(),
         legalName: z.string().min(3),
         fundId: z.string().uuid(),
         fundName: z.string().optional(),
@@ -117,7 +119,7 @@ export const cedenteOnboardingRouter = router({
     .input(
       z.object({
         id: z.string().uuid(),
-        section: z.enum(['empresa', 'estrutura']),
+        section: z.enum(['empresa', 'estrutura', 'pessoa', 'contratos']),
         data: z.record(z.unknown()),
         advance: z.boolean().default(false),
       }),
@@ -153,6 +155,64 @@ export const cedenteOnboardingRouter = router({
     .input(z.object({ id: z.string().uuid(), documentId: z.string().uuid() }))
     .mutation(({ input, ctx }) =>
       cedenteService.confirmCedenteDocumentUpload(input.id, input.documentId, {
+        userId: ctx.user.id,
+        ip: ctx.ip,
+      }),
+    ),
+
+  addContract: permissionProcedure('cedentes.write')
+    .input(
+      z.object({
+        id: z.string().uuid(),
+        kind: z.enum(['emprestimo', 'antecipacao', 'outro']),
+        title: z.string().trim().min(3).max(255),
+        notes: z.string().trim().max(2000).optional(),
+      }),
+    )
+    .mutation(({ input, ctx }) =>
+      cedenteService.addCedenteContract(
+        input.id,
+        { kind: input.kind, title: input.title, notes: input.notes },
+        { userId: ctx.user.id, ip: ctx.ip },
+      ),
+    ),
+
+  removeContract: permissionProcedure('cedentes.write')
+    .input(z.object({ id: z.string().uuid(), contractId: z.string().uuid() }))
+    .mutation(({ input, ctx }) =>
+      cedenteService.removeCedenteContract(input.id, input.contractId, {
+        userId: ctx.user.id,
+        ip: ctx.ip,
+      }),
+    ),
+
+  requestContractUpload: permissionProcedure('cedentes.write')
+    .input(
+      z.object({
+        id: z.string().uuid(),
+        contractId: z.string().uuid(),
+        fileName: z.string().min(1).max(255),
+        mimeType: z.string().min(1).max(100),
+        size: z.number().int().positive(),
+      }),
+    )
+    .mutation(({ input, ctx }) =>
+      cedenteService.requestCedenteContractUpload(input.id, input.contractId, input, {
+        userId: ctx.user.id,
+        ip: ctx.ip,
+      }),
+    ),
+
+  confirmContractUpload: permissionProcedure('cedentes.write')
+    .input(
+      z.object({
+        id: z.string().uuid(),
+        contractId: z.string().uuid(),
+        documentId: z.string().uuid(),
+      }),
+    )
+    .mutation(({ input, ctx }) =>
+      cedenteService.confirmCedenteContractUpload(input.id, input.contractId, input.documentId, {
         userId: ctx.user.id,
         ip: ctx.ip,
       }),

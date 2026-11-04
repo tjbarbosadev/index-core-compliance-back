@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import fs from 'node:fs/promises';
-import type { CedenteStage, Document, Prisma } from '@prisma/client';
+import type { CedenteContractKind, CedenteStage, Document, Prisma } from '@prisma/client';
 import { TRPCError } from '@trpc/server';
 import { prisma } from '../db/index.js';
 import { env } from '../lib/env.js';
@@ -13,7 +13,8 @@ import {
   keyFromFileUri,
   saveFile,
 } from '../lib/storage.js';
-import { isValidCnpj } from '../lib/cedente/validators.js';
+import { pfSigningForm } from '../lib/cedente/pf-form.js';
+import { isValidCnpj, isValidCpf } from '../lib/cedente/validators.js';
 import {
   ALLOWED_DOCUMENT_MIME_TYPES,
   MAX_DOCUMENT_BYTES,
@@ -41,6 +42,7 @@ import {
   type CedenteEmpresaData,
   type CedenteEstruturaData,
 } from '../schemas/cedente-pj.schema.js';
+import { cedentePessoaSchema, type CedentePessoaData } from '../schemas/cedente-pf.schema.js';
 import { logAudit } from './audit.service.js';
 import { sendCedenteStageEmail } from './email.service.js';
 import {
@@ -76,13 +78,16 @@ export const CEDENTE_STAGE_LABEL: Record<CedenteStage, string> = {
 const EDITABLE_STAGES: CedenteStage[] = ['rascunho', 'pendencia_juridica'];
 const FINAL_STAGES: CedenteStage[] = ['aprovado', 'rejeitado'];
 
-export type CedenteSection = 'empresa' | 'estrutura';
+export type CedenteSection = 'empresa' | 'estrutura' | 'pessoa' | 'contratos';
 
 type PjData = { empresa?: Record<string, unknown>; estrutura?: Record<string, unknown> };
+type PfData = { pessoa?: Record<string, unknown> };
 
 export type CedenteStepData = {
   pj?: PjData;
   pjValidated?: { empresa?: boolean; estrutura?: boolean };
+  pf?: PfData;
+  pfValidated?: { pessoa?: boolean };
   generation?: { formHash: string; generatedAt: string; documentIds: string[] };
   kyc?: KycFlags;
   aml?: { lawfulOriginDeclared: boolean };
@@ -96,6 +101,7 @@ function readStepData(raw: unknown): CedenteStepData {
 }
 
 export function formFromStepData(data: CedenteStepData): Record<string, unknown> {
+  if (data.pf) return pfSigningForm(data.pf.pessoa ?? {});
   return { ...(data.pj?.empresa ?? {}), ...(data.pj?.estrutura ?? {}) };
 }
 
@@ -288,6 +294,7 @@ export async function getCedenteOnboarding(id: string) {
         orderBy: { createdAt: 'desc' },
         include: { reviewer: { select: { id: true, name: true, email: true } } },
       },
+      contracts: { orderBy: { createdAt: 'asc' }, include: { document: true } },
     },
   });
   if (!process) return null;
@@ -349,11 +356,22 @@ export async function getCedenteOnboarding(id: string) {
     form: {
       empresa: stepData.pj?.empresa ?? {},
       estrutura: stepData.pj?.estrutura ?? {},
+      pessoa: stepData.pf?.pessoa ?? {},
       validated: {
         empresa: Boolean(stepData.pjValidated?.empresa),
         estrutura: Boolean(stepData.pjValidated?.estrutura),
+        pessoa: Boolean(stepData.pfValidated?.pessoa),
       },
     },
+    contracts: process.contracts.map((contract) => ({
+      id: contract.id,
+      kind: contract.kind,
+      title: contract.title,
+      notes: contract.notes ?? undefined,
+      document:
+        contract.document && contract.document.hashSha256 ? mapDoc(contract.document) : undefined,
+      createdAt: contract.createdAt.toISOString(),
+    })),
     signers: extractSigners(form),
     documentSlots: catalog.map((slot) => {
       const doc = current.get(slot.key);
@@ -427,25 +445,44 @@ export async function listCedenteOnboardings(filter: { stage?: CedenteStage } = 
 // ---------------------------------------------------------------------------
 
 export async function createCedenteOnboarding(
-  input: { cnpj: string; legalName: string; fundId: string },
+  input: {
+    partyType?: 'pf' | 'pj';
+    cpf?: string;
+    cnpj?: string;
+    legalName: string;
+    fundId: string;
+  },
   actor: Actor,
 ) {
-  const cnpj = digitsOnly(input.cnpj);
-  if (!isValidCnpj(cnpj)) throw APP_ERROR.BAD_REQUEST('CNPJ inválido');
+  const partyType = input.partyType ?? 'pj';
+  const rawDocument = partyType === 'pf' ? input.cpf : input.cnpj;
+  if (!rawDocument) {
+    throw APP_ERROR.BAD_REQUEST(partyType === 'pf' ? 'CPF é obrigatório' : 'CNPJ é obrigatório');
+  }
+  const document = digitsOnly(rawDocument);
+  if (partyType === 'pf') {
+    if (!isValidCpf(document)) throw APP_ERROR.BAD_REQUEST('CPF inválido');
+  } else if (!isValidCnpj(document)) {
+    throw APP_ERROR.BAD_REQUEST('CNPJ inválido');
+  }
 
+  const legalName = input.legalName.trim();
   const created = await createOnboarding({
-    partyType: 'pj',
-    cpfCnpj: cnpj,
-    legalName: input.legalName.trim(),
+    partyType,
+    cpfCnpj: document,
+    legalName,
     fundId: input.fundId,
     kind: 'cedente',
   });
   if (!created) throw APP_ERROR.NOT_FOUND('Onboarding de cedente');
 
-  const stepData: CedenteStepData = {
-    pj: { empresa: { company: input.legalName.trim(), cnpj }, estrutura: {} },
-    pjValidated: {},
-  };
+  const stepData: CedenteStepData =
+    partyType === 'pf'
+      ? { pf: { pessoa: { nome: legalName, cpf: document } }, pfValidated: {} }
+      : {
+          pj: { empresa: { company: legalName, cnpj: document }, estrutura: {} },
+          pjValidated: {},
+        };
   await prisma.$transaction(async (tx) => {
     await tx.onboardingStep.upsert({
       where: {
@@ -458,9 +495,19 @@ export async function createCedenteOnboarding(
       where: { id: created.id },
       data: { cedenteStage: 'rascunho', stepDataJson: stepData as Prisma.InputJsonValue },
     });
+    if (created.partyType !== partyType && created.partyStatus === 'pendente') {
+      await tx.party.update({
+        where: { id: created.partyId },
+        data: { type: partyType, legalName },
+      });
+    }
   });
 
-  await audit(actor, 'cedentes.onboarding.create', created.id, { cnpj, fundId: input.fundId });
+  await audit(actor, 'cedentes.onboarding.create', created.id, {
+    partyType,
+    document,
+    fundId: input.fundId,
+  });
   return reloadCedenteOnboarding(created.id);
 }
 
@@ -475,7 +522,39 @@ export async function saveCedenteSection(
   assertStage(process.cedenteStage, EDITABLE_STAGES, 'Edição do formulário');
 
   const stepData = readStepData(process.stepDataJson);
-  let stored: CedenteEmpresaData | CedenteEstruturaData | Record<string, unknown> = data;
+  const isPf = process.party.type === 'pf';
+
+  if (section === 'contratos') {
+    if (!isPf) {
+      throw APP_ERROR.BAD_REQUEST('A etapa de contratos é exclusiva de pessoa física');
+    }
+    const inPendencia = process.cedenteStage === 'pendencia_juridica';
+    const nextStep =
+      options.advance && !inPendencia
+        ? Math.max(process.currentStep, CEDENTE_STEP.documentos)
+        : process.currentStep;
+    if (nextStep !== process.currentStep) {
+      await prisma.$transaction(async (tx) => {
+        await tx.onboardingProcess.update({ where: { id }, data: { currentStep: nextStep } });
+        await setStep(tx, id, nextStep, actor.userId);
+      });
+    }
+    await audit(actor, 'cedentes.onboarding.save_section', id, { section, validated: false });
+    return reloadCedenteOnboarding(id);
+  }
+
+  if (section === 'pessoa' && !isPf) {
+    throw APP_ERROR.BAD_REQUEST('Dados de pessoa física não se aplicam a pessoa jurídica');
+  }
+  if (section !== 'pessoa' && isPf) {
+    throw APP_ERROR.BAD_REQUEST('Cedente pessoa física não usa o formulário de empresa');
+  }
+
+  let stored:
+    | CedenteEmpresaData
+    | CedenteEstruturaData
+    | CedentePessoaData
+    | Record<string, unknown> = data;
   let validated = false;
 
   if (options.advance && section === 'empresa') {
@@ -486,6 +565,14 @@ export async function saveCedenteSection(
     }
     stored = parsed.data;
     validated = true;
+  } else if (options.advance && section === 'pessoa') {
+    const parsed = cedentePessoaSchema.safeParse(data);
+    if (!parsed.success) throw APP_ERROR.BAD_REQUEST(formatZodIssues(parsed.error));
+    if (digitsOnly(parsed.data.cpf) !== process.party.cpfCnpj) {
+      throw APP_ERROR.BAD_REQUEST('CPF do formulário difere do CPF do cadastro');
+    }
+    stored = parsed.data;
+    validated = true;
   } else if (options.advance) {
     const parsed = cedenteEstruturaSchema.safeParse(data);
     if (!parsed.success) throw APP_ERROR.BAD_REQUEST(formatZodIssues(parsed.error));
@@ -493,13 +580,20 @@ export async function saveCedenteSection(
     validated = true;
   }
 
-  const next: CedenteStepData = {
-    ...stepData,
-    pj: { ...stepData.pj, [section]: stored },
-    pjValidated: { ...stepData.pjValidated, [section]: validated },
-  };
+  const next: CedenteStepData =
+    section === 'pessoa'
+      ? {
+          ...stepData,
+          pf: { ...stepData.pf, pessoa: stored },
+          pfValidated: { ...stepData.pfValidated, pessoa: validated },
+        }
+      : {
+          ...stepData,
+          pj: { ...stepData.pj, [section]: stored },
+          pjValidated: { ...stepData.pjValidated, [section]: validated },
+        };
 
-  const sectionStep = section === 'empresa' ? CEDENTE_STEP.empresa : CEDENTE_STEP.estrutura;
+  const sectionStep = section === 'estrutura' ? CEDENTE_STEP.estrutura : CEDENTE_STEP.empresa;
   const inPendencia = process.cedenteStage === 'pendencia_juridica';
   const nextStep =
     options.advance && !inPendencia
@@ -512,8 +606,12 @@ export async function saveCedenteSection(
       data: { stepDataJson: next as Prisma.InputJsonValue, currentStep: nextStep },
     });
     if (nextStep !== process.currentStep) await setStep(tx, id, nextStep, actor.userId);
-    if (section === 'empresa' && validated) {
-      const company = String((stored as CedenteEmpresaData).company ?? '').trim();
+    if (validated && (section === 'empresa' || section === 'pessoa')) {
+      const company = String(
+        (stored as { company?: string; nome?: string }).company ??
+          (stored as { nome?: string }).nome ??
+          '',
+      ).trim();
       if (company) {
         await tx.party.update({ where: { id: process.partyId }, data: { legalName: company } });
       }
@@ -525,6 +623,13 @@ export async function saveCedenteSection(
 }
 
 function validatedForm(stepData: CedenteStepData) {
+  if (stepData.pf) {
+    const pessoa = cedentePessoaSchema.safeParse(stepData.pf.pessoa ?? {});
+    if (!pessoa.success) {
+      throw APP_ERROR.BAD_REQUEST(`Dados da pessoa: ${formatZodIssues(pessoa.error)}`);
+    }
+    return pfSigningForm(pessoa.data);
+  }
   const empresa = cedenteEmpresaSchema.safeParse(stepData.pj?.empresa ?? {});
   if (!empresa.success) {
     throw APP_ERROR.BAD_REQUEST(`Dados da empresa: ${formatZodIssues(empresa.error)}`);
@@ -633,6 +738,141 @@ export async function submitCedenteDocuments(id: string, actor: Actor) {
 }
 
 // ---------------------------------------------------------------------------
+// Contracts (empréstimo, antecipação ou qualquer outro do cedente)
+// ---------------------------------------------------------------------------
+
+const CONTRACT_REMOVABLE: CedenteStage[] = ['rascunho', 'pendencia_juridica', 'aprovado'];
+
+function assertUploadable(input: { mimeType: string; size: number }) {
+  if (!(ALLOWED_DOCUMENT_MIME_TYPES as readonly string[]).includes(input.mimeType)) {
+    throw APP_ERROR.BAD_REQUEST('Formato não permitido (PDF, JPG, PNG ou WEBP)');
+  }
+  if (!(input.size > 0) || input.size > MAX_DOCUMENT_BYTES) {
+    throw APP_ERROR.BAD_REQUEST('Arquivo deve ter até 10 MB');
+  }
+}
+
+export async function addCedenteContract(
+  id: string,
+  input: { kind: CedenteContractKind; title: string; notes?: string },
+  actor: Actor,
+) {
+  const process = await findCedenteProcess(id);
+  if (!process.cedenteStage || process.cedenteStage === 'rejeitado') {
+    throw APP_ERROR.BAD_REQUEST('Não é possível adicionar contrato nesta etapa');
+  }
+  const title = input.title.trim();
+  if (title.length < 3) throw APP_ERROR.BAD_REQUEST('Identifique o contrato');
+
+  const contract = await prisma.cedenteContract.create({
+    data: {
+      onboardingId: id,
+      kind: input.kind,
+      title: title.slice(0, 255),
+      notes: input.notes?.trim() || null,
+    },
+  });
+  await audit(actor, 'cedentes.contract.add', id, { contractId: contract.id, kind: input.kind });
+  return reloadCedenteOnboarding(id);
+}
+
+export async function removeCedenteContract(id: string, contractId: string, actor: Actor) {
+  const process = await findCedenteProcess(id);
+  assertStage(process.cedenteStage, CONTRACT_REMOVABLE, 'Remoção de contrato');
+  const contract = await prisma.cedenteContract.findFirst({
+    where: { id: contractId, onboardingId: id },
+  });
+  if (!contract) throw APP_ERROR.NOT_FOUND('Contrato');
+
+  await prisma.$transaction(async (tx) => {
+    await tx.cedenteContract.delete({ where: { id: contract.id } });
+    if (contract.documentId) {
+      await tx.document.delete({ where: { id: contract.documentId } });
+    }
+  });
+  await audit(actor, 'cedentes.contract.remove', id, { contractId });
+  return reloadCedenteOnboarding(id);
+}
+
+export async function requestCedenteContractUpload(
+  id: string,
+  contractId: string,
+  input: { fileName: string; mimeType: string; size: number },
+  actor: Actor,
+) {
+  const process = await findCedenteProcess(id);
+  if (!process.cedenteStage || process.cedenteStage === 'rejeitado') {
+    throw APP_ERROR.BAD_REQUEST('Não é possível anexar contrato nesta etapa');
+  }
+  const contract = await prisma.cedenteContract.findFirst({
+    where: { id: contractId, onboardingId: id },
+  });
+  if (!contract) throw APP_ERROR.NOT_FOUND('Contrato');
+  assertUploadable(input);
+
+  const doc = await prisma.document.create({
+    data: {
+      partyId: process.partyId,
+      type: 'outro',
+      slot: `contrato-${contract.id}`,
+      fileName: input.fileName.slice(0, 255),
+      fileUri: '',
+      hashSha256: '',
+      mimeType: input.mimeType,
+      sizeBytes: input.size,
+      status: 'pendente',
+      uploadedById: actor.userId,
+    },
+  });
+  const key = buildObjectKey(process.partyId, 'outro', doc.id);
+  await prisma.document.update({ where: { id: doc.id }, data: { fileUri: fileUriForKey(key) } });
+  return { documentId: doc.id, uploadUrl: `${env.publicApiUrl}/files/upload/${doc.id}` };
+}
+
+export async function confirmCedenteContractUpload(
+  id: string,
+  contractId: string,
+  documentId: string,
+  actor: Actor,
+) {
+  const process = await findCedenteProcess(id);
+  if (!process.cedenteStage || process.cedenteStage === 'rejeitado') {
+    throw APP_ERROR.BAD_REQUEST('Não é possível anexar contrato nesta etapa');
+  }
+  const contract = await prisma.cedenteContract.findFirst({
+    where: { id: contractId, onboardingId: id },
+  });
+  if (!contract) throw APP_ERROR.NOT_FOUND('Contrato');
+
+  const doc = await prisma.document.findFirst({
+    where: { id: documentId, partyId: process.partyId, slot: `contrato-${contract.id}` },
+  });
+  if (!doc) throw APP_ERROR.NOT_FOUND('Documento');
+
+  let data: Buffer;
+  try {
+    data = await fs.readFile(getAbsolutePath(keyFromFileUri(doc.fileUri)));
+  } catch {
+    throw APP_ERROR.BAD_REQUEST('Arquivo não encontrado — refaça o upload');
+  }
+
+  await prisma.document.update({
+    where: { id: doc.id },
+    data: { hashSha256: sha256(data), sizeBytes: data.length, status: 'em_analise' },
+  });
+  await prisma.cedenteContract.update({
+    where: { id: contract.id },
+    data: { documentId: doc.id },
+  });
+  if (contract.documentId && contract.documentId !== doc.id) {
+    await prisma.document.delete({ where: { id: contract.documentId } }).catch(() => undefined);
+  }
+
+  await audit(actor, 'cedentes.contract.upload', id, { contractId, documentId });
+  return reloadCedenteOnboarding(id);
+}
+
+// ---------------------------------------------------------------------------
 // Step 4: PDFs + ZapSign
 // ---------------------------------------------------------------------------
 
@@ -716,7 +956,7 @@ export async function sendCedenteForSignature(id: string, actor: Actor) {
   for (const doc of docs) {
     const pdf = await fs.readFile(getAbsolutePath(keyFromFileUri(doc.fileUri)));
     const zapSigners =
-      doc.slot === 'ficha-cadastral-pj'
+      doc.slot === 'ficha-cadastral-pj' || doc.slot === 'ficha-cadastral-pf'
         ? [
             {
               name: signers[0]!.name,
@@ -1003,6 +1243,7 @@ export async function submitLegalReview(
   const pdf = await buildLegalOpinionPdf({
     legalName: process.party.legalName,
     cnpj: process.party.cpfCnpj,
+    partyType: process.party.type,
     decision: input.decision,
     opinion,
     pendingItems,
@@ -1165,6 +1406,96 @@ function bankCodeOf(banco: string): string {
   return (code ?? banco).slice(0, 10);
 }
 
+async function approvePfCedente(
+  id: string,
+  process: Awaited<ReturnType<typeof findCedenteProcess>>,
+  stepData: CedenteStepData,
+  justification: string,
+  actor: Actor,
+) {
+  const pessoa = cedentePessoaSchema.parse(stepData.pf?.pessoa ?? {});
+  const now = new Date();
+  const expiresAt = new Date(now);
+  expiresAt.setFullYear(expiresAt.getFullYear() + 1);
+  const highRisk = process.party.pepFlag || pessoa.politicallyExposed === 'sim';
+
+  await prisma.$transaction(async (tx) => {
+    await tx.party.update({
+      where: { id: process.partyId },
+      data: {
+        status: 'aprovado',
+        approvedAt: now,
+        approvedBy: actor.userId,
+        expiresAt,
+        legalName: pessoa.nome,
+        pepFlag: highRisk,
+        riskLevel: highRisk ? 'alto' : process.party.riskLevel,
+      },
+    });
+
+    await tx.partyContact.deleteMany({ where: { partyId: process.partyId } });
+    await tx.partyContact.create({
+      data: {
+        partyId: process.partyId,
+        email: pessoa.email,
+        phone: `+${pessoa.ddi1} (${pessoa.ddd1}) ${pessoa.telefone1}`.slice(0, 30),
+        isPrimary: true,
+        addressJson: {
+          logradouro: pessoa.logradouro,
+          numero: pessoa.numero,
+          complemento: pessoa.complemento ?? null,
+          bairro: pessoa.bairro,
+          cidade: pessoa.cidade,
+          estado: pessoa.estado,
+          cep: pessoa.cep,
+          pais: pessoa.pais,
+        },
+      },
+    });
+
+    await tx.partyBankAccount.deleteMany({ where: { partyId: process.partyId } });
+    await tx.partyBankAccount.create({
+      data: {
+        partyId: process.partyId,
+        bankCode: bankCodeOf(pessoa.banco),
+        branch: pessoa.agenciaNumero.slice(0, 10),
+        account: `${pessoa.contaCorrente}-${pessoa.digito}`.slice(0, 20),
+        accountType: 'corrente',
+        isPrimary: true,
+        approvedBy: actor.userId,
+        approvedAt: now,
+      },
+    });
+
+    await tx.partyBeneficialOwner.deleteMany({ where: { partyId: process.partyId } });
+    await tx.cedente.upsert({
+      where: { partyId: process.partyId },
+      update: { juntaValidationStatus: 'nao_aplicavel' },
+      create: { partyId: process.partyId, juntaValidationStatus: 'nao_aplicavel' },
+    });
+
+    await tx.onboardingProcess.update({
+      where: { id },
+      data: {
+        status: 'aprovado',
+        cedenteStage: 'aprovado',
+        completedAt: now,
+        currentStep: CEDENTE_STEP.aprovacao,
+        approvalJustification: justification,
+        approvedById: actor.userId,
+      },
+    });
+    await tx.onboardingStep.updateMany({
+      where: { processId: id },
+      data: { status: 'concluido', completedAt: now },
+    });
+  });
+
+  await audit(actor, 'cedentes.approve', id, { justification, highRisk, partyType: 'pf' });
+  await notifyStage(id, pessoa.nome, 'aprovado', 'Cedente aprovado pelo Compliance.');
+  return reloadCedenteOnboarding(id);
+}
+
 export async function approveCedenteOnboarding(id: string, justification: string, actor: Actor) {
   const trimmed = justification.trim();
   if (!trimmed) throw APP_ERROR.BAD_REQUEST('Justificativa de aprovação é obrigatória');
@@ -1205,7 +1536,11 @@ export async function approveCedenteOnboarding(id: string, justification: string
   const duplicate = await prisma.party.findFirst({
     where: { cpfCnpj: process.party.cpfCnpj, status: 'aprovado', id: { not: process.partyId } },
   });
-  if (duplicate) throw APP_ERROR.CONFLICT('CNPJ duplicado');
+  if (duplicate) throw APP_ERROR.CONFLICT('CPF/CNPJ duplicado');
+
+  if (stepData.pf) {
+    return approvePfCedente(id, process, stepData, trimmed, actor);
+  }
 
   const empresa = cedenteEmpresaSchema.parse(stepData.pj?.empresa ?? {});
   const estrutura = cedenteEstruturaSchema.parse(stepData.pj?.estrutura ?? {});

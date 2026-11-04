@@ -1,6 +1,7 @@
 export type LegalOpinionInput = {
   legalName: string;
   cnpj: string;
+  partyType?: 'pf' | 'pj';
   decision: 'favoravel' | 'pendencia' | 'desfavoravel';
   opinion: string;
   pendingItems: string[];
@@ -24,8 +25,9 @@ const STATUS_LABEL: Record<string, string> = {
   expirado: 'Expirado',
 };
 
-function formatCnpj(digits: string): string {
+function formatDocument(digits: string): string {
   const d = digits.replace(/\D/g, '');
+  if (d.length === 11) return d.replace(/(\d{3})(\d{3})(\d{3})(\d{2})/, '$1.$2.$3-$4');
   if (d.length !== 14) return digits;
   return `${d.slice(0, 2)}.${d.slice(2, 5)}.${d.slice(5, 8)}/${d.slice(8, 12)}-${d.slice(12)}`;
 }
@@ -45,16 +47,19 @@ export async function buildLegalOpinionPdf(input: LegalOpinionInput): Promise<Bu
 
     doc.fontSize(18).fillColor('#0f766e').text('IndexCore — Parecer jurídico');
     doc.moveDown(0.3);
+    const pf = input.partyType === 'pf' || input.cnpj.replace(/\D/g, '').length === 11;
     doc.fontSize(10).fillColor('#374151');
-    doc.text('Onboarding de cedente (Pessoa Jurídica)');
+    doc.text(
+      pf ? 'Onboarding de cedente (Pessoa Física)' : 'Onboarding de cedente (Pessoa Jurídica)',
+    );
     doc.moveDown();
 
     const kv = (label: string, value: string) => {
       doc.font('Helvetica-Bold').text(`${label}: `, { continued: true });
       doc.font('Helvetica').text(value);
     };
-    kv('Razão social', input.legalName);
-    kv('CNPJ', formatCnpj(input.cnpj));
+    kv(pf ? 'Nome' : 'Razão social', input.legalName);
+    kv(pf ? 'CPF' : 'CNPJ', formatDocument(input.cnpj));
     kv('Decisão', DECISION_LABEL[input.decision]);
     kv('Responsável', `${input.reviewerName} <${input.reviewerEmail}>`);
     kv('Data', input.reviewedAt.toISOString());
