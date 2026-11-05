@@ -7,6 +7,7 @@ import {
   isOpenWaConfigured,
   logoutSession,
   normalizeBrazilWaPhone,
+  resolveOpenWaSessionId,
   type OpenWaConfigInput,
   type OpenWaSessionInfo,
 } from './whatsapp.service.js';
@@ -47,10 +48,22 @@ export async function listReadyWhatsappPhones(): Promise<string[]> {
   return out;
 }
 
-/** First ready OpenWA session id (by connectedAt), for sending. */
+/**
+ * Session id used to send amortization alerts.
+ * Order: OPENWA_SESSION_ID → resolve by OPENWA_SESSION_NAME → first ready opt-in.
+ */
 export async function resolveSenderOpenWaSessionId(): Promise<string | null> {
   const explicit = env.openWaSessionId?.trim();
   if (explicit) return explicit;
+
+  if (isOpenWaConfigured({ baseUrl: env.openWaBaseUrl, apiKey: env.openWaApiKey })) {
+    const byName = await resolveOpenWaSessionId({
+      baseUrl: env.openWaBaseUrl,
+      apiKey: env.openWaApiKey,
+      sessionName: env.openWaSessionName,
+    });
+    if (byName?.trim()) return byName.trim();
+  }
 
   const row = await prisma.whatsappSession.findFirst({
     where: { status: 'ready', openwaSessionId: { not: null } },

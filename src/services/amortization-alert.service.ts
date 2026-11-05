@@ -515,9 +515,18 @@ export async function runAmortizationAlertJob(opts?: {
   }
 
   if (destinations.length === 0) {
-    // nothing
-  } else if (!openWaBaseUrl?.trim() || !openWaApiKey?.trim() || !resolvedSessionId) {
-    console.log('[job] amortization-alert whatsapp_skipped reason=missing_openwa_or_session');
+    console.log(`[job] amortization-alert whatsapp_skipped reason=no_destinations slot=${slot}`);
+  } else if (!openWaBaseUrl?.trim() || !openWaApiKey?.trim()) {
+    console.log(
+      `[job] amortization-alert whatsapp_skipped reason=missing_openwa_config destinations=${destinations.length}`,
+    );
+    for (const to of destinations) {
+      channels.push({ channel: 'whatsapp', destination: to, slot, reason: 'skipped' });
+    }
+  } else if (!resolvedSessionId) {
+    console.log(
+      `[job] amortization-alert whatsapp_skipped reason=missing_sender_session destinations=${destinations.length}`,
+    );
     for (const to of destinations) {
       channels.push({ channel: 'whatsapp', destination: to, slot, reason: 'skipped' });
     }
