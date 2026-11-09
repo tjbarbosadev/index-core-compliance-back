@@ -5,6 +5,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vites
 
 const mocks = vi.hoisted(() => ({
   subscribeFim: vi.fn(),
+  redeemFim: vi.fn(),
   getFimShareholder: vi.fn(),
   getFimShareholderYields: vi.fn(),
 }));
@@ -18,6 +19,16 @@ vi.mock('../services/fim-subscription.service.js', async () => {
     subscribeFim: mocks.subscribeFim,
     getFimShareholder: mocks.getFimShareholder,
     getFimShareholderYields: mocks.getFimShareholderYields,
+  };
+});
+
+vi.mock('../services/fim-redemption.service.js', async () => {
+  const actual = await vi.importActual<typeof import('../services/fim-redemption.service.js')>(
+    '../services/fim-redemption.service.js',
+  );
+  return {
+    ...actual,
+    redeemFim: mocks.redeemFim,
   };
 });
 
@@ -146,5 +157,36 @@ describe('FIM partner routes', () => {
     );
     expect(res.status).toBe(200);
     expect(mocks.subscribeFim).toHaveBeenCalled();
+  });
+
+  it('creates a redemption only with the redemptions write scope', async () => {
+    const denied = await call(
+      '/v1/fim/redemptions',
+      {
+        method: 'POST',
+        body: JSON.stringify({
+          document: '12345678901',
+          amountBrl: 149.9,
+          externalId: 'bank-redeem-1',
+        }),
+      },
+      ['fim.subscriptions.write'],
+    );
+    expect(denied.status).toBe(403);
+    mocks.redeemFim.mockResolvedValue({ result: 'pending', document: '12345678901' });
+    const res = await call(
+      '/v1/fim/redemptions',
+      {
+        method: 'POST',
+        body: JSON.stringify({
+          document: '12345678901',
+          amountBrl: 149.9,
+          externalId: 'bank-redeem-1',
+        }),
+      },
+      ['fim.redemptions.write'],
+    );
+    expect(res.status).toBe(200);
+    expect(mocks.redeemFim).toHaveBeenCalled();
   });
 });

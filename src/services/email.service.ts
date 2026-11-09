@@ -335,6 +335,40 @@ export async function sendFimSubscriptionNotice(input: {
   return copies.every((copy) => copy.sent);
 }
 
+export async function sendFimRedemptionNotice(input: {
+  name: string;
+  document: string;
+  amountBrl: number;
+  totalContributed: number;
+  availableToRedeem: number;
+  settlesOn: string;
+  frozenUntil: string;
+  externalId: string;
+  partnerName: string;
+}): Promise<boolean> {
+  const subject = 'IndexCore — resgate visual FIM (caixinha)';
+  const lines = [
+    'Resgate visual vindo do app do banco. Não houve pagamento nem débito no fundo.',
+    'A caixinha inteira para de render até a liquidação (D+5 dias úteis).',
+    '',
+    `Parceiro: ${input.partnerName}`,
+    `Cliente: ${input.name}`,
+    `Documento: ${input.document}`,
+    `Valor do resgate: R$ ${input.amountBrl.toFixed(2)}`,
+    `Aportado líquido: R$ ${input.totalContributed.toFixed(2)}`,
+    `Disponível para resgate: R$ ${input.availableToRedeem.toFixed(2)}`,
+    `Liquidação em: ${input.settlesOn}`,
+    `Congelado até: ${input.frozenUntil}`,
+    `externalId: ${input.externalId}`,
+  ];
+  const text = lines.join('\n');
+  const html = lines.map((line) => `<p>${escapeHtml(line) || '&nbsp;'}</p>`).join('');
+  const copies = await Promise.all(
+    COTISTA_ACCESS_ADMIN_EMAILS.map((to) => sendResendEmail({ to, subject, text, html })),
+  );
+  return copies.every((copy) => copy.sent);
+}
+
 export async function sendVendorInvoiceAlertEmail(input: {
   to: string;
   subject: string;

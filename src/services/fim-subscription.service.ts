@@ -40,6 +40,7 @@ export type FimSubscriptionResult = 'created' | 'toppedUp';
 export type FimPositionView = {
   name: string;
   document: string;
+  /** Aportado líquido de resgates já liquidados (pendentes ainda não reduzem). */
   totalContributed: number;
   quotaCount: number;
   balance: number;
@@ -47,6 +48,10 @@ export type FimPositionView = {
   yieldAccumulated: number;
   startDate: string;
   visualizationDate: string;
+  pendingRedemptionTotal: number;
+  availableToRedeem: number;
+  frozenUntil: string | null;
+  yielding: boolean;
 };
 
 export type FimSubscribeResponse = {
@@ -206,22 +211,60 @@ async function positionView(
   document: string,
 ): Promise<FimPositionView> {
   const visualizationDate = toYYYYMMDD(getVisualizationDate());
-  const subscriptions = await prisma.fimSubscription.findMany({
-    where: { partyFundLinkId: linkId },
-    orderBy: { occurredOn: 'asc' },
-  });
-  const link = await prisma.partyFundLink.findUnique({ where: { id: linkId } });
-  const totalContributed = money(
+  const today = todayYYYYMMDD();
+  const [subscriptions, redemptions, link] = await Promise.all([
+    prisma.fimSubscription.findMany({
+      where: { partyFundLinkId: linkId },
+      orderBy: { occurredOn: 'asc' },
+    }),
+    prisma.fimRedemption.findMany({
+      where: { partyFundLinkId: linkId },
+      orderBy: { requestedOn: 'asc' },
+    }),
+    prisma.partyFundLink.findUnique({ where: { id: linkId } }),
+  ]);
+  const grossContributed =
     subscriptions.length > 0
       ? subscriptions.reduce((sum, row) => sum + Number(row.amount), 0)
-      : Number(link?.initialInvestment ?? 0),
+      : Number(link?.initialInvestment ?? 0);
+  const settledRedeemed = redemptions
+    .filter((row) => row.status === 'settled' || toYYYYMMDD(row.settlesOn) <= visualizationDate)
+    .reduce((sum, row) => sum + Number(row.amount), 0);
+  const pendingRedemptionTotal = money(
+    redemptions
+      .filter((row) => row.status === 'pending' && toYYYYMMDD(row.settlesOn) > visualizationDate)
+      .reduce((sum, row) => sum + Number(row.amount), 0),
   );
+  const totalContributed = money(grossContributed - settledRedeemed);
+  const availableToRedeem = money(
+    Math.max(0, totalContributed - pendingRedemptionTotal - FIM_MIN_BRL),
+  );
+  const activeFreezes = redemptions.filter((row) => {
+    const from = toYYYYMMDD(row.requestedOn);
+    const toExclusive = toYYYYMMDD(row.settlesOn);
+    return today >= from && today < toExclusive;
+  });
+  const frozenUntil =
+    activeFreezes.length > 0
+      ? activeFreezes
+          .map((row) => toYYYYMMDD(row.settlesOn))
+          .sort()
+          .at(-1)!
+      : null;
   const latest = await getLatestYieldOnOrBefore(linkId, visualizationDate);
   const latestDate = latest ? toYYYYMMDD(latest.referenceDate) : null;
-  const pending = subscriptions
+  const pendingSubs = subscriptions
     .filter((row) => !latestDate || toYYYYMMDD(row.occurredOn) > latestDate)
     .reduce((sum, row) => sum + Number(row.amount), 0);
-  const balance = money((latest ? Number(latest.balanceTotal) : 0) + pending);
+  const pendingSettledRedemptions = redemptions
+    .filter((row) => {
+      const settlesOn = toYYYYMMDD(row.settlesOn);
+      return (!latestDate || settlesOn > latestDate) && settlesOn <= visualizationDate;
+    })
+    .reduce((sum, row) => sum + Number(row.amount), 0);
+  const balance = money(
+    (latest ? Number(latest.balanceTotal) : 0) + pendingSubs - pendingSettledRedemptions,
+  );
   const startDate =
     (subscriptions[0] ? toYYYYMMDD(subscriptions[0].occurredOn) : null) ??
     (link?.contractStartDate ? toYYYYMMDD(link.contractStartDate) : visualizationDate);
@@ -235,6 +278,10 @@ async function positionView(
     yieldAccumulated: money(latest ? Number(latest.yieldAccumulated) : 0),
     startDate,
     visualizationDate,
+    pendingRedemptionTotal,
+    availableToRedeem,
+    frozenUntil,
+    yielding: frozenUntil === null,
   };
 }
 
@@ -385,8 +432,13 @@ export async function subscribeFim(input: {
     });
 
     if (result === 'toppedUp') {
-      const rows = await tx.fimSubscription.findMany({ where: { partyFundLinkId: linkId } });
-      const total = money(rows.reduce((sum, row) => sum + Number(row.amount), 0));
+      const [rows, settled] = await Promise.all([
+        tx.fimSubscription.findMany({ where: { partyFundLinkId: linkId } }),
+        tx.fimRedemption.findMany({ where: { partyFundLinkId: linkId, status: 'settled' } }),
+      ]);
+      const gross = rows.reduce((sum, row) => sum + Number(row.amount), 0);
+      const redeemed = settled.reduce((sum, row) => sum + Number(row.amount), 0);
+      const total = money(gross - redeemed);
       await tx.partyFundLink.update({
         where: { id: linkId },
         data: {

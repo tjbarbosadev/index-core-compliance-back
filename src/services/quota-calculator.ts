@@ -241,6 +241,20 @@ export function isWeekday(date: Date): boolean {
   return weekday !== 0 && weekday !== 6;
 }
 
+/** Avança `n` dias úteis (segunda–sexta). Sem calendário de feriado. */
+export function addBusinessDays(date: Date, n: number): Date {
+  if (!Number.isInteger(n) || n < 0) {
+    throw new Error('addBusinessDays exige n inteiro >= 0');
+  }
+  let out = new Date(date);
+  let remaining = n;
+  while (remaining > 0) {
+    out = addDays(out, 1);
+    if (isWeekday(out)) remaining -= 1;
+  }
+  return out;
+}
+
 /** Fator de um dia útil: 120% da variação da SELIC já líquida de 0,1 p.p. (base 252). */
 export function fimDailyFactor(selicFactorAnual: number): number {
   const dailySelic = Math.pow(selicFactorAnual, 1 / FIM_BUSINESS_DAYS_PER_YEAR) - 1;
@@ -273,6 +287,12 @@ export type FimYieldState = {
 /** Aporte datado. Entra no saldo depois do rendimento e do come-cotas do dia. */
 export type FimContribution = { date: string; amount: number };
 
+/** Janela [from, toExclusive) sem Selic nem come-cotas (caixa congelada por resgate). */
+export type FimFreezeWindow = { from: string; toExclusive: string };
+
+/** Resgate liquidado: reduz aportado e saldo na data, depois do rendimento do dia. */
+export type FimSettlement = { date: string; amount: number };
+
 function contributionTotal(items: FimContribution[], upTo: string): number {
   let total = 0;
   for (const item of items) {
@@ -289,11 +309,32 @@ function contributionOn(items: FimContribution[], date: string): number {
   return total;
 }
 
+function settlementTotal(items: FimSettlement[], upTo: string): number {
+  let total = 0;
+  for (const item of items) {
+    if (item.date <= upTo) total += item.amount;
+  }
+  return total;
+}
+
+function settlementOn(items: FimSettlement[], date: string): number {
+  let total = 0;
+  for (const item of items) {
+    if (item.date === date) total += item.amount;
+  }
+  return total;
+}
+
+function isFrozenOn(windows: FimFreezeWindow[], dateStr: string): boolean {
+  return windows.some((window) => dateStr >= window.from && dateStr < window.toExclusive);
+}
+
 /**
  * Projeta um trecho do FIM a partir do saldo de abertura.
  * O primeiro dia só não rende quando `accrueFromFirstDay` é falso (data de cotização).
  * Come-cotas reduz o saldo e a base que segue rendendo.
  * Com `contributions`, cada aporte soma no principal só a partir do próprio dia.
+ * `freezeWindows` pausam Selic/come-cotas; `settlements` reduzem aportado após o dia.
  */
 export function generateFimYieldChunk(params: {
   investment: number;
@@ -303,6 +344,8 @@ export function generateFimYieldChunk(params: {
   accrueFromFirstDay: boolean;
   getSelicForDate: (dateStr: string) => SelicLookup;
   contributions?: FimContribution[];
+  freezeWindows?: FimFreezeWindow[];
+  settlements?: FimSettlement[];
 }): { days: DayYieldResult[]; closing: FimYieldState } {
   const {
     investment,
@@ -312,14 +355,23 @@ export function generateFimYieldChunk(params: {
     accrueFromFirstDay,
     getSelicForDate,
     contributions,
+    freezeWindows,
+    settlements,
   } = params;
   if (fromDate > endDate) {
     return { days: [], closing: opening };
   }
 
-  if (contributions && contributions.length > 0) {
+  const hasCashflows =
+    (contributions && contributions.length > 0) ||
+    (freezeWindows && freezeWindows.length > 0) ||
+    (settlements && settlements.length > 0);
+
+  if (hasCashflows) {
     return generateFimYieldChunkFromContributions({
-      contributions,
+      contributions: contributions ?? [],
+      freezeWindows: freezeWindows ?? [],
+      settlements: settlements ?? [],
       fromDate,
       endDate,
       opening,
@@ -385,13 +437,24 @@ export function generateFimYieldChunk(params: {
 
 function generateFimYieldChunkFromContributions(params: {
   contributions: FimContribution[];
+  freezeWindows: FimFreezeWindow[];
+  settlements: FimSettlement[];
   fromDate: string;
   endDate: string;
   opening: FimYieldState;
   accrueFromFirstDay: boolean;
   getSelicForDate: (dateStr: string) => SelicLookup;
 }): { days: DayYieldResult[]; closing: FimYieldState } {
-  const { contributions, fromDate, endDate, opening, accrueFromFirstDay, getSelicForDate } = params;
+  const {
+    contributions,
+    freezeWindows,
+    settlements,
+    fromDate,
+    endDate,
+    opening,
+    accrueFromFirstDay,
+    getSelicForDate,
+  } = params;
   const days: DayYieldResult[] = [];
   let balance = opening.balance;
   let taxBasis = opening.taxBasis;
@@ -402,7 +465,9 @@ function generateFimYieldChunkFromContributions(params: {
     const dateStr = toYYYYMMDD(d);
     const selic = getSelicForDate(dateStr);
     const isContractStart = dateStr === fromDate && !accrueFromFirstDay;
-    const principal = contributionTotal(contributions, dateStr);
+    const frozen = isFrozenOn(freezeWindows, dateStr);
+    const principal =
+      contributionTotal(contributions, dateStr) - settlementTotal(settlements, dateStr);
     let yieldDay = 0;
     let hadWithdraw = false;
     let withdrawAmount: number | null = null;
@@ -413,10 +478,10 @@ function generateFimYieldChunkFromContributions(params: {
       yieldAccumulated = 0;
       yieldDay = 0;
     } else {
-      if (isWeekday(d)) {
+      if (!frozen && isWeekday(d)) {
         balance *= fimDailyFactor(selic.selicFactor);
       }
-      if (isFimComeCotasDay(dateStr)) {
+      if (!frozen && isFimComeCotasDay(dateStr)) {
         const gain = balance - taxBasis;
         if (gain > 0) {
           withdrawAmount = gain * FIM_COME_COTAS_RATE;
@@ -430,6 +495,11 @@ function generateFimYieldChunkFromContributions(params: {
       if (added > 0) {
         balance += added;
         taxBasis += added;
+      }
+      const redeemed = settlementOn(settlements, dateStr);
+      if (redeemed > 0) {
+        balance -= redeemed;
+        taxBasis -= redeemed;
       }
       yieldAccumulated = balance - principal;
     }

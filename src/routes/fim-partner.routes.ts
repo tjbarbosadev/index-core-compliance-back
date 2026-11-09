@@ -1,5 +1,6 @@
 import type { Express, NextFunction, Request, Response } from 'express';
 import {
+  FIM_SCOPE_REDEMPTIONS_WRITE,
   FIM_SCOPE_SHAREHOLDERS_READ,
   FIM_SCOPE_SUBSCRIPTIONS_WRITE,
   type AuthenticatedPartner,
@@ -11,6 +12,7 @@ import {
   parseFimSubscription,
   subscribeFim,
 } from '../services/fim-subscription.service.js';
+import { parseFimRedemption, redeemFim } from '../services/fim-redemption.service.js';
 
 type PartnerRequest = Request & { partner?: AuthenticatedPartner };
 
@@ -69,6 +71,35 @@ export function registerFimPartnerRoutes(app: Express, guards: Guards) {
         }
         console.error('[v1/fim/subscriptions]', err);
         res.status(500).json({ error: 'Erro ao registrar aplicação' });
+      }
+    },
+  );
+
+  app.post(
+    '/v1/fim/redemptions',
+    requirePartner,
+    logPartnerAccess,
+    requireScope(FIM_SCOPE_REDEMPTIONS_WRITE),
+    async (req: PartnerRequest, res: Response) => {
+      const parsed = parseFimRedemption(req.body);
+      if (!parsed.ok) {
+        res.status(400).json({ error: parsed.message });
+        return;
+      }
+      try {
+        const result = await redeemFim({
+          partner: { id: req.partner!.id, name: req.partner!.name },
+          body: parsed.input,
+          ip: clientIp(req),
+        });
+        res.status(200).json(result);
+      } catch (err) {
+        if (err instanceof FimPartnerError) {
+          res.status(err.status).json({ error: err.message });
+          return;
+        }
+        console.error('[v1/fim/redemptions]', err);
+        res.status(500).json({ error: 'Erro ao registrar resgate' });
       }
     },
   );

@@ -141,6 +141,11 @@ enum AmortizationKind {
   @@map("amortization_kind")
 }
 
+enum FimRedemptionStatus {
+  pending
+  settled
+}
+
 enum AmortizationAlertChannel {
   telegram
   whatsapp
@@ -607,6 +612,7 @@ model PartyFundLink {
   dailyYields      CotistaDailyYield[]
   amortizations    CotistaAmortization[]
   fimSubscriptions FimSubscription[]
+  fimRedemptions   FimRedemption[]
 
   @@index([partyId])
   @@index([fundId])
@@ -678,6 +684,27 @@ model FimSubscription {
   @@unique([partnerId, externalId])
   @@index([partyFundLinkId, occurredOn])
   @@map("fim_subscriptions")
+}
+
+/** Visual FIM redemption from a partner. Freezes the box until settlesOn (D+5 business days). */
+model FimRedemption {
+  id              String              @id @default(uuid()) @db.Uuid
+  partyFundLinkId String              @map("party_fund_link_id") @db.Uuid
+  partnerId       String              @map("partner_id") @db.Uuid
+  externalId      String              @map("external_id") @db.VarChar(128)
+  amount          Decimal             @db.Decimal(18, 2)
+  requestedOn     DateTime            @map("requested_on") @db.Date
+  settlesOn       DateTime            @map("settles_on") @db.Date
+  status          FimRedemptionStatus @default(pending)
+  createdAt       DateTime            @default(now()) @map("created_at") @db.Timestamptz
+
+  partyFundLink PartyFundLink @relation(fields: [partyFundLinkId], references: [id], onDelete: Cascade)
+  partner       ApiPartner    @relation(fields: [partnerId], references: [id], onDelete: Restrict)
+
+  @@unique([partnerId, externalId])
+  @@index([partyFundLinkId, settlesOn])
+  @@index([partyFundLinkId, status])
+  @@map("fim_redemptions")
 }
 
 // ============================================================================
@@ -939,6 +966,7 @@ model ApiPartner {
 
   requestLogs      ApiPartnerRequestLog[]
   fimSubscriptions FimSubscription[]
+  fimRedemptions   FimRedemption[]
 
   @@index([tokenHash])
   @@index([previousTokenHash])

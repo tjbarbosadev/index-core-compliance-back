@@ -15,6 +15,7 @@ import {
   toYYYYMMDD,
   tomorrowYYYYMMDD,
   addDays,
+  addBusinessDays,
   SELIC_SPREAD_PP,
   FIM_YIELD_CHUNK_DAYS,
 } from './quota-calculator.js';
@@ -307,6 +308,65 @@ describe('FIM yield projection', () => {
     expect(wednesday.yieldDay).toBeCloseTo(accrued - tuesday.balanceTotal, 6);
     expect(wednesday.balanceTotal).toBeCloseTo(accrued + 5_000, 6);
     expect(wednesday.yieldAccumulated).toBeCloseTo(wednesday.balanceTotal - 15_000, 6);
+  });
+
+  it('freezes the whole box until settlement and then reduces principal', () => {
+    // Mon 2026-06-01 request → D+5 business = Mon 2026-06-08
+    const { days } = generateFimYieldChunk({
+      investment: 1_000,
+      fromDate: '2026-06-01',
+      endDate: '2026-06-09',
+      opening: { balance: 1_000, taxBasis: 1_000, yieldAccumulated: 0 },
+      accrueFromFirstDay: false,
+      getSelicForDate: () => selic,
+      contributions: [{ date: '2026-06-01', amount: 1_000 }],
+      freezeWindows: [{ from: '2026-06-01', toExclusive: '2026-06-08' }],
+      settlements: [{ date: '2026-06-08', amount: 149.9 }],
+    });
+    const tuesday = days.find((day) => day.referenceDate === '2026-06-02')!;
+    const friday = days.find((day) => day.referenceDate === '2026-06-05')!;
+    const settles = days.find((day) => day.referenceDate === '2026-06-08')!;
+    const after = days.find((day) => day.referenceDate === '2026-06-09')!;
+    expect(tuesday.yieldDay).toBe(0);
+    expect(tuesday.balanceTotal).toBe(1_000);
+    expect(friday.balanceTotal).toBe(1_000);
+    const accrued = 1_000 * fimDailyFactor(1.139);
+    expect(settles.principal).toBeCloseTo(850.1, 6);
+    expect(settles.balanceTotal).toBeCloseTo(accrued - 149.9, 6);
+    expect(after.principal).toBeCloseTo(850.1, 6);
+    expect(after.balanceTotal).toBeCloseTo(settles.balanceTotal * fimDailyFactor(1.139), 6);
+  });
+
+  it('does not accrue a contribution made during a freeze until the freeze ends', () => {
+    const { days } = generateFimYieldChunk({
+      investment: 1_000,
+      fromDate: '2026-06-01',
+      endDate: '2026-06-09',
+      opening: { balance: 1_000, taxBasis: 1_000, yieldAccumulated: 0 },
+      accrueFromFirstDay: false,
+      getSelicForDate: () => selic,
+      contributions: [
+        { date: '2026-06-01', amount: 1_000 },
+        { date: '2026-06-03', amount: 200 },
+      ],
+      freezeWindows: [{ from: '2026-06-01', toExclusive: '2026-06-08' }],
+      settlements: [{ date: '2026-06-08', amount: 100 }],
+    });
+    const wednesday = days.find((day) => day.referenceDate === '2026-06-03')!;
+    const friday = days.find((day) => day.referenceDate === '2026-06-05')!;
+    expect(wednesday.balanceTotal).toBe(1_200);
+    expect(wednesday.yieldDay).toBe(0);
+    expect(friday.balanceTotal).toBe(1_200);
+    expect(friday.yieldDay).toBe(0);
+  });
+});
+
+describe('addBusinessDays', () => {
+  it('skips the weekend when counting five business days', () => {
+    // Monday → next Monday
+    expect(toYYYYMMDD(addBusinessDays(parseYYYYMMDD('2026-06-01'), 5))).toBe('2026-06-08');
+    // Friday → next Friday
+    expect(toYYYYMMDD(addBusinessDays(parseYYYYMMDD('2026-06-05'), 5))).toBe('2026-06-12');
   });
 });
 

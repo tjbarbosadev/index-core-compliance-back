@@ -7,6 +7,7 @@ const mocks = vi.hoisted(() => ({
   subscriptionFindUnique: vi.fn(),
   subscriptionFindMany: vi.fn(),
   subscriptionCount: vi.fn(),
+  redemptionFindMany: vi.fn(),
   linkFindUnique: vi.fn(),
   partyCreate: vi.fn(),
   cotistaCreate: vi.fn(),
@@ -28,6 +29,7 @@ vi.mock('../db/index.js', () => ({
       findMany: mocks.subscriptionFindMany,
       count: mocks.subscriptionCount,
     },
+    fimRedemption: { findMany: mocks.redemptionFindMany },
     partyFundLink: { findUnique: mocks.linkFindUnique },
     $transaction: async (fn: (tx: unknown) => Promise<unknown>) =>
       fn({
@@ -39,6 +41,7 @@ vi.mock('../db/index.js', () => ({
           create: mocks.subscriptionCreate,
           findMany: mocks.subscriptionFindMany,
         },
+        fimRedemption: { findMany: mocks.redemptionFindMany },
       }),
   },
 }));
@@ -144,6 +147,7 @@ describe('subscribeFim', () => {
     mocks.subscriptionFindMany.mockResolvedValue([
       { amount: 100, occurredOn: new Date('2026-06-01') },
     ]);
+    mocks.redemptionFindMany.mockResolvedValue([]);
     mocks.linkFindUnique.mockResolvedValue({
       id: linkId,
       initialInvestment: 100,

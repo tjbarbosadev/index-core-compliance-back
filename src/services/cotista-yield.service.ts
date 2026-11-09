@@ -6,6 +6,8 @@ import {
   generateFimYieldChunk,
   getVisualizationDate,
   type FimContribution,
+  type FimFreezeWindow,
+  type FimSettlement,
   mapDataJsonQuota,
   toYYYYMMDD,
   parseYYYYMMDD,
@@ -13,6 +15,44 @@ import {
   type YieldQuotaType,
 } from './quota-calculator.js';
 import { getSelicMapForRange, resolveSelicForDate, type SelicEntry } from './selic.service.js';
+
+function money(value: number): number {
+  return Math.round(value * 100) / 100;
+}
+
+async function syncFimLinkPrincipal(partyFundLinkId: string): Promise<number> {
+  const [subscriptions, settled] = await Promise.all([
+    prisma.fimSubscription.findMany({ where: { partyFundLinkId } }),
+    prisma.fimRedemption.findMany({ where: { partyFundLinkId, status: 'settled' } }),
+  ]);
+  const gross = subscriptions.reduce((sum, row) => sum + Number(row.amount), 0);
+  const redeemed = settled.reduce((sum, row) => sum + Number(row.amount), 0);
+  const total = money(gross - redeemed);
+  await prisma.partyFundLink.update({
+    where: { id: partyFundLinkId },
+    data: {
+      initialInvestment: total,
+      currentPrincipal: total,
+      quotaAmount: total,
+      quotaCount: Math.round(total),
+    },
+  });
+  return total;
+}
+
+async function settleDueFimRedemptions(partyFundLinkId: string, asOfDate: string): Promise<void> {
+  const result = await prisma.fimRedemption.updateMany({
+    where: {
+      partyFundLinkId,
+      status: 'pending',
+      settlesOn: { lte: parseYYYYMMDD(asOfDate) },
+    },
+    data: { status: 'settled' },
+  });
+  if (result.count > 0) {
+    await syncFimLinkPrincipal(partyFundLinkId);
+  }
+}
 
 function asYieldQuota(quotaType: string): YieldQuotaType {
   if (quotaType === 'senior_i' || quotaType === 'senior_ii') return quotaType;
@@ -102,13 +142,27 @@ async function writeFimLinkYields(
     where: { partyFundLinkId: link.id },
     orderBy: { occurredOn: 'asc' },
   });
-  const contributions: FimContribution[] | undefined =
+  const storedRedemptions = await prisma.fimRedemption.findMany({
+    where: { partyFundLinkId: link.id },
+    orderBy: { requestedOn: 'asc' },
+  });
+  const contributions: FimContribution[] =
     storedContributions.length > 0
       ? storedContributions.map((row) => ({
           date: toYYYYMMDD(row.occurredOn),
           amount: Number(row.amount),
         }))
-      : undefined;
+      : [];
+  const freezeWindows: FimFreezeWindow[] = storedRedemptions.map((row) => ({
+    from: toYYYYMMDD(row.requestedOn),
+    toExclusive: toYYYYMMDD(row.settlesOn),
+  }));
+  const settlements: FimSettlement[] = storedRedemptions.map((row) => ({
+    date: toYYYYMMDD(row.settlesOn),
+    amount: Number(row.amount),
+  }));
+  const hasCashflows =
+    contributions.length > 0 || freezeWindows.length > 0 || settlements.length > 0;
 
   const selicMap = await getSelicMapForRange(cursor, end);
   const getSelicForDate = (dateStr: string): SelicEntry => resolveSelicForDate(selicMap, dateStr);
@@ -123,7 +177,9 @@ async function writeFimLinkYields(
       opening,
       accrueFromFirstDay,
       getSelicForDate,
-      contributions,
+      contributions: hasCashflows ? contributions : undefined,
+      freezeWindows: hasCashflows ? freezeWindows : undefined,
+      settlements: hasCashflows ? settlements : undefined,
     });
 
     for (const day of days) {
@@ -195,6 +251,7 @@ async function writeFimLinkYields(
     cursor = toYYYYMMDD(addDays(parseYYYYMMDD(chunkEnd), 1));
   }
 
+  await settleDueFimRedemptions(link.id, end);
   return written;
 }
 

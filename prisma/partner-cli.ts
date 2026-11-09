@@ -1,7 +1,7 @@
 /**
  * CLI: criar / rotacionar tokens de parceiros externos.
  *
- *   npm run partner:create -- --name=acme --email=ops@acme.com --rpm=60 --scopes=fim.subscriptions.write,fim.shareholders.read
+ *   npm run partner:create -- --name=acme --email=ops@acme.com --rpm=60 --scopes=fim.subscriptions.write,fim.redemptions.write,fim.shareholders.read
  *   npm run partner:rotate -- --id=<uuid>
  */
 import { createApiPartner, rotatePartnerToken } from '../src/services/partner.service.js';
@@ -70,7 +70,7 @@ async function main() {
   }
 
   console.log(`Uso:
-  npx tsx prisma/partner-cli.ts create --name=acme --email=ops@acme.com --rpm=60 --scopes=fim.subscriptions.write,fim.shareholders.read
+  npx tsx prisma/partner-cli.ts create --name=acme --email=ops@acme.com --rpm=60 --scopes=fim.subscriptions.write,fim.redemptions.write,fim.shareholders.read
   npx tsx prisma/partner-cli.ts rotate --id=<uuid>
   npx tsx prisma/partner-cli.ts list`);
 }

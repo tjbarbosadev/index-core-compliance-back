@@ -15,6 +15,7 @@ Só estas rotas:
 | Método | Rota                                    | Escopo                    |
 | ------ | --------------------------------------- | ------------------------- |
 | `POST` | `/v1/fim/subscriptions`                 | `fim.subscriptions.write` |
+| `POST` | `/v1/fim/redemptions`                   | `fim.redemptions.write`   |
 | `GET`  | `/v1/fim/shareholders/:document`        | `fim.shareholders.read`   |
 | `GET`  | `/v1/fim/shareholders/:document/yields` | `fim.shareholders.read`   |
 
@@ -65,6 +66,50 @@ curl -sS 'https://api.admin.opcore.com.br/v1/fim/subscriptions' \
   -d '{"name":"Maria Exemplo","document":"12345678901","amountBrl":100,"externalId":"bank-op-1"}'
 ```
 
+## Registrar um resgate
+
+`POST /v1/fim/redemptions`
+
+```json
+{
+  "document": "12345678901",
+  "amountBrl": 149.9,
+  "externalId": "bank-redeem-1"
+}
+```
+
+- `document`, `amountBrl` e `externalId` são obrigatórios.
+- O resgate sai do **aportado** (`totalContributed`), não do saldo com rendimento.
+- Depois de reservar o valor, a caixinha deve sobrar pelo menos **R$ 100** (1 cota). O teto é `availableToRedeem`.
+- No pedido a API **reserva** o valor: a caixinha **inteira para de render**.
+- Liquidação em **D+5 dias úteis** (segunda–sexta; sem calendário de feriado). Em `settlesOn` o aportado cai e o rendimento volta no restante.
+- `externalId` único por token. Repetir o mesmo id não cria outro resgate.
+
+A resposta:
+
+```json
+{
+  "document": "12345678901",
+  "result": "pending",
+  "amountBrl": 149.9,
+  "settlesOn": "2026-06-08",
+  "totalContributed": 1000,
+  "availableToRedeem": 750.1,
+  "frozenUntil": "2026-06-08",
+  "balance": 1000.42,
+  "yieldAccumulated": 0.42
+}
+```
+
+Enquanto o resgate está pendente, `totalContributed` ainda não desconta o valor; `availableToRedeem` e o freeze já refletem a reserva. Após a liquidação, `totalContributed` cai pelo `amountBrl` e o rendimento acumulado permanece na caixinha.
+
+```bash
+curl -sS 'https://api.admin.opcore.com.br/v1/fim/redemptions' \
+  -H 'Authorization: Bearer opc_••••' \
+  -H 'Content-Type: application/json' \
+  -d '{"document":"12345678901","amountBrl":149.9,"externalId":"bank-redeem-1"}'
+```
+
 ## Números básicos
 
 `GET /v1/fim/shareholders/12345678901`
@@ -73,17 +118,26 @@ curl -sS 'https://api.admin.opcore.com.br/v1/fim/subscriptions' \
 {
   "name": "Maria Exemplo",
   "document": "12345678901",
-  "totalContributed": 100,
-  "quotaCount": 100,
-  "balance": 100,
+  "totalContributed": 1000,
+  "quotaCount": 1000,
+  "balance": 1000.42,
   "yieldDay": 0,
-  "yieldAccumulated": 0,
+  "yieldAccumulated": 0.42,
   "startDate": "2026-06-01",
-  "visualizationDate": "2026-05-29"
+  "visualizationDate": "2026-05-29",
+  "pendingRedemptionTotal": 149.9,
+  "availableToRedeem": 750.1,
+  "frozenUntil": "2026-06-08",
+  "yielding": false
 }
 ```
 
-`quotaCount` segue o valor aplicado (1 cota = R$ 1). `visualizationDate` é o último dia já calculado.
+- `totalContributed` / `quotaCount`: aportado líquido de resgates **já liquidados** (1 cota = R$ 1). Pendentes ainda não reduzem este número.
+- `pendingRedemptionTotal`: soma dos resgates ainda não liquidados.
+- `availableToRedeem`: quanto ainda pode resgatar mantendo residual ≥ R$ 100.
+- `frozenUntil`: data de liquidação do freeze ativo (`settlesOn`), ou `null` se estiver rendendo.
+- `yielding`: `false` enquanto a caixinha estiver congelada por resgate.
+- `visualizationDate`: último dia já calculado.
 
 ```bash
 curl -sS 'https://api.admin.opcore.com.br/v1/fim/shareholders/12345678901' \
@@ -99,7 +153,7 @@ Use um dos dois modos. Não misture.
 - Últimos 30, 60 ou 90 dias corridos, até a data de visualização: `?days=30`, `?days=60` ou `?days=90`.
 - Período escolhido, inclusive: `?from=2026-05-01&to=2026-05-29`. Datas anteriores ao início da caixinha e posteriores à data de visualização são cortadas.
 
-Cada item traz `referenceDate`, `selicPercent`, `principal`, `yieldDay`, `yieldAccumulated` e `balanceTotal`.
+Cada item traz `referenceDate`, `selicPercent`, `principal`, `yieldDay`, `yieldAccumulated` e `balanceTotal`. Em dias de freeze, `yieldDay` fica 0.
 
 ```bash
 curl -sS 'https://api.admin.opcore.com.br/v1/fim/shareholders/12345678901/yields?days=30' \
@@ -117,11 +171,11 @@ curl -sS 'https://api.admin.opcore.com.br/v1/fim/shareholders/12345678901/yields
 
 ## Erros
 
-| HTTP | Quando                                                                   |
-| ---- | ------------------------------------------------------------------------ |
-| 400  | Campo inválido, valor abaixo de 100, ou `days` misturado com `from`/`to` |
-| 401  | Token ausente ou inválido                                                |
-| 403  | Token sem o escopo da rota                                               |
-| 404  | Documento sem caixinha FIM, ou fundo inexistente                         |
-| 409  | `externalId` já usado para outro documento ou outro fundo                |
-| 429  | Limite de 120 requisições por minuto                                     |
+| HTTP | Quando                                                                                                                     |
+| ---- | -------------------------------------------------------------------------------------------------------------------------- |
+| 400  | Campo inválido, aporte abaixo de 100, resgate acima do disponível / residual &lt; 100, ou `days` misturado com `from`/`to` |
+| 401  | Token ausente ou inválido                                                                                                  |
+| 403  | Token sem o escopo da rota                                                                                                 |
+| 404  | Documento sem caixinha FIM, ou fundo inexistente                                                                           |
+| 409  | `externalId` já usado para outro documento ou outro fundo                                                                  |
+| 429  | Limite de 120 requisições por minuto                                                                                       |
