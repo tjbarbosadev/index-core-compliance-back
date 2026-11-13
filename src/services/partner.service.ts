@@ -5,11 +5,13 @@ import { sendPartnerTokenEmail } from './email.service.js';
 
 export const FIM_SCOPE_SUBSCRIPTIONS_WRITE = 'fim.subscriptions.write';
 export const FIM_SCOPE_REDEMPTIONS_WRITE = 'fim.redemptions.write';
+export const FIM_SCOPE_CANCELLATIONS_WRITE = 'fim.cancellations.write';
 export const FIM_SCOPE_SHAREHOLDERS_READ = 'fim.shareholders.read';
 
 export const FIM_PARTNER_SCOPES = [
   FIM_SCOPE_SUBSCRIPTIONS_WRITE,
   FIM_SCOPE_REDEMPTIONS_WRITE,
+  FIM_SCOPE_CANCELLATIONS_WRITE,
   FIM_SCOPE_SHAREHOLDERS_READ,
 ] as const;
 

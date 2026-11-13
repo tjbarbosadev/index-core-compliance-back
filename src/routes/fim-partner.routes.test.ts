@@ -6,6 +6,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vites
 const mocks = vi.hoisted(() => ({
   subscribeFim: vi.fn(),
   redeemFim: vi.fn(),
+  cancelFim: vi.fn(),
   getFimShareholder: vi.fn(),
   getFimShareholderYields: vi.fn(),
 }));
@@ -29,6 +30,16 @@ vi.mock('../services/fim-redemption.service.js', async () => {
   return {
     ...actual,
     redeemFim: mocks.redeemFim,
+  };
+});
+
+vi.mock('../services/fim-cancellation.service.js', async () => {
+  const actual = await vi.importActual<typeof import('../services/fim-cancellation.service.js')>(
+    '../services/fim-cancellation.service.js',
+  );
+  return {
+    ...actual,
+    cancelFim: mocks.cancelFim,
   };
 });
 
@@ -187,6 +198,48 @@ describe('FIM partner routes', () => {
       ['fim.redemptions.write'],
     );
     expect(res.status).toBe(200);
-    expect(mocks.redeemFim).toHaveBeenCalled();
+    expect(mocks.redeemFim).toHaveBeenCalledWith(expect.objectContaining({ dryRun: false }));
+  });
+
+  it('passes dry-run from the X-Fim-Dry-Run header', async () => {
+    mocks.redeemFim.mockResolvedValue({ result: 'pending', dryRun: true });
+    const res = await fetch(`${baseUrl}/v1/fim/redemptions`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Fim-Dry-Run': '1',
+        'x-test-partner': JSON.stringify(partner(['fim.redemptions.write'])),
+      },
+      body: JSON.stringify({
+        document: '12345678901',
+        amountBrl: 10,
+        externalId: 'dry-1',
+      }),
+    });
+    expect(res.status).toBe(200);
+    expect(mocks.redeemFim).toHaveBeenCalledWith(expect.objectContaining({ dryRun: true }));
+  });
+
+  it('cancels only with the cancellations write scope', async () => {
+    const denied = await call(
+      '/v1/fim/cancellations',
+      {
+        method: 'POST',
+        body: JSON.stringify({ externalId: 'bank-1', kind: 'subscription' }),
+      },
+      ['fim.subscriptions.write'],
+    );
+    expect(denied.status).toBe(403);
+    mocks.cancelFim.mockResolvedValue({ result: 'cancelled', dryRun: false });
+    const res = await call(
+      '/v1/fim/cancellations',
+      {
+        method: 'POST',
+        body: JSON.stringify({ externalId: 'bank-1', kind: 'subscription' }),
+      },
+      ['fim.cancellations.write'],
+    );
+    expect(res.status).toBe(200);
+    expect(mocks.cancelFim).toHaveBeenCalledWith(expect.objectContaining({ dryRun: false }));
   });
 });

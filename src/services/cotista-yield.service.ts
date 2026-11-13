@@ -138,24 +138,41 @@ async function writeFimLinkYields(
 
   if (cursor > end) return 0;
 
+  await prisma.fimSubscription.updateMany({
+    where: {
+      partyFundLinkId: link.id,
+      status: 'pending',
+      accruesOn: { lte: parseYYYYMMDD(end) },
+    },
+    data: { status: 'active' },
+  });
+
   const storedContributions = await prisma.fimSubscription.findMany({
-    where: { partyFundLinkId: link.id },
-    orderBy: { occurredOn: 'asc' },
+    where: {
+      partyFundLinkId: link.id,
+      status: { in: ['pending', 'active'] },
+      accruesOn: { lte: parseYYYYMMDD(end) },
+    },
+    orderBy: { accruesOn: 'asc' },
   });
   const storedRedemptions = await prisma.fimRedemption.findMany({
-    where: { partyFundLinkId: link.id },
+    where: {
+      partyFundLinkId: link.id,
+      status: { in: ['pending', 'settled'] },
+    },
     orderBy: { requestedOn: 'asc' },
   });
   const contributions: FimContribution[] =
     storedContributions.length > 0
       ? storedContributions.map((row) => ({
-          date: toYYYYMMDD(row.occurredOn),
+          date: toYYYYMMDD(row.accruesOn),
           amount: Number(row.amount),
         }))
       : [];
   const freezeWindows: FimFreezeWindow[] = storedRedemptions.map((row) => ({
     from: toYYYYMMDD(row.requestedOn),
     toExclusive: toYYYYMMDD(row.settlesOn),
+    amount: Number(row.amount),
   }));
   const settlements: FimSettlement[] = storedRedemptions.map((row) => ({
     date: toYYYYMMDD(row.settlesOn),

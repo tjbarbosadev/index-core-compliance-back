@@ -84,14 +84,14 @@ describe('parseFimSubscription', () => {
     if (parsed.ok) expect(parsed.input.document).toBe('12345678901');
   });
 
-  it('rejects amounts below 100', () => {
+  it('accepts top-up amounts below 100 at parse time', () => {
     const parsed = parseFimSubscription({
       name: 'Maria',
       document: '12345678901',
-      amountBrl: 99.99,
+      amountBrl: 50,
       externalId: 'bank-1',
     });
-    expect(parsed.ok).toBe(false);
+    expect(parsed.ok).toBe(true);
   });
 });
 
@@ -145,7 +145,12 @@ describe('subscribeFim', () => {
     mocks.linkCreate.mockResolvedValue({ id: linkId });
     mocks.subscriptionCreate.mockResolvedValue({ id: 'sub-1' });
     mocks.subscriptionFindMany.mockResolvedValue([
-      { amount: 100, occurredOn: new Date('2026-06-01') },
+      {
+        amount: 100,
+        occurredOn: new Date('2026-06-01'),
+        accruesOn: new Date('2026-06-01'),
+        status: 'active',
+      },
     ]);
     mocks.redemptionFindMany.mockResolvedValue([]);
     mocks.linkFindUnique.mockResolvedValue({
@@ -188,12 +193,22 @@ describe('subscribeFim', () => {
       partyFundLinks: [{ id: linkId, fundId, quotaType: 'unica' }],
     });
     mocks.subscriptionFindMany.mockResolvedValue([
-      { amount: 100, occurredOn: new Date('2026-06-01') },
-      { amount: 150, occurredOn: new Date('2026-06-03') },
+      {
+        amount: 100,
+        occurredOn: new Date('2026-06-01'),
+        accruesOn: new Date('2026-06-01'),
+        status: 'active',
+      },
+      {
+        amount: 150,
+        occurredOn: new Date('2026-06-03'),
+        accruesOn: new Date('2026-06-03'),
+        status: 'active',
+      },
     ]);
     const result = await subscribeFim({
       partner,
-      body: { ...body, externalId: 'bank-2', amountBrl: 150 },
+      body: { ...body, externalId: 'bank-2', amountBrl: 50 },
     });
     expect(mocks.partyCreate).not.toHaveBeenCalled();
     expect(mocks.linkUpdate).toHaveBeenCalledWith(
@@ -209,6 +224,8 @@ describe('subscribeFim', () => {
     mocks.subscriptionFindUnique.mockResolvedValue({
       amount: 100,
       occurredOn: new Date('2026-06-01'),
+      accruesOn: new Date('2026-06-01'),
+      status: 'active',
       createdAt: new Date('2026-06-01'),
       partyFundLinkId: linkId,
       partyFundLink: { fundId, party: { cpfCnpj: '12345678901', legalName: 'Maria' } },
@@ -220,5 +237,20 @@ describe('subscribeFim', () => {
     expect(mocks.email).not.toHaveBeenCalled();
     expect(result.result).toBe('created');
     expect(result.amountBrl).toBe(100);
+  });
+
+  it('rejects first application below R$ 100', async () => {
+    await expect(subscribeFim({ partner, body: { ...body, amountBrl: 50 } })).rejects.toMatchObject(
+      { status: 400 },
+    );
+  });
+
+  it('dry-run does not persist', async () => {
+    const result = await subscribeFim({ partner, body, dryRun: true });
+    expect(result.dryRun).toBe(true);
+    expect(result.result).toBe('created');
+    expect(mocks.partyCreate).not.toHaveBeenCalled();
+    expect(mocks.subscriptionCreate).not.toHaveBeenCalled();
+    expect(mocks.email).not.toHaveBeenCalled();
   });
 });

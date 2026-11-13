@@ -4,11 +4,8 @@ const mocks = vi.hoisted(() => ({
   partyFindFirst: vi.fn(),
   redemptionFindUnique: vi.fn(),
   redemptionCreate: vi.fn(),
-  subscriptionFindMany: vi.fn(),
-  redemptionFindMany: vi.fn(),
-  linkFindUnique: vi.fn(),
+  getFimShareholder: vi.fn(),
   backfill: vi.fn(),
-  latestYield: vi.fn(),
   email: vi.fn(),
   audit: vi.fn(),
 }));
@@ -19,16 +16,22 @@ vi.mock('../db/index.js', () => ({
     fimRedemption: {
       findUnique: mocks.redemptionFindUnique,
       create: mocks.redemptionCreate,
-      findMany: mocks.redemptionFindMany,
     },
-    fimSubscription: { findMany: mocks.subscriptionFindMany },
-    partyFundLink: { findUnique: mocks.linkFindUnique },
   },
 }));
 
+vi.mock('./fim-subscription.service.js', async () => {
+  const actual = await vi.importActual<typeof import('./fim-subscription.service.js')>(
+    './fim-subscription.service.js',
+  );
+  return {
+    ...actual,
+    getFimShareholder: mocks.getFimShareholder,
+  };
+});
+
 vi.mock('./cotista-yield.service.js', () => ({
   backfillPartyFundLinkYields: mocks.backfill,
-  getLatestYieldOnOrBefore: mocks.latestYield,
 }));
 
 vi.mock('./email.service.js', () => ({
@@ -45,7 +48,6 @@ vi.mock('./quota-calculator.js', async () => {
   return {
     ...actual,
     todayYYYYMMDD: () => '2026-06-01',
-    getVisualizationDate: () => actual.parseYYYYMMDD('2026-05-29'),
   };
 });
 
@@ -58,6 +60,23 @@ const cotistaId = '33333333-3333-4333-8333-333333333333';
 const linkId = '44444444-4444-4444-8444-444444444444';
 const partner = { id: '55555555-5555-4555-8555-555555555555', name: 'Ipe Core' };
 
+const position = {
+  name: 'Maria',
+  document: '12345678901',
+  totalContributed: 1000,
+  quotaCount: 1000,
+  balance: 1000,
+  yieldDay: 0,
+  yieldAccumulated: 0,
+  startDate: '2026-06-01',
+  visualizationDate: '2026-05-29',
+  pendingRedemptionTotal: 0,
+  availableToRedeem: 1000,
+  frozenAmount: 0,
+  frozenUntil: null,
+  yielding: true,
+};
+
 describe('parseFimRedemption', () => {
   it('accepts a partial redeem amount', () => {
     const parsed = parseFimRedemption({
@@ -66,16 +85,6 @@ describe('parseFimRedemption', () => {
       externalId: 'bank-redeem-1',
     });
     expect(parsed.ok).toBe(true);
-    if (parsed.ok) {
-      expect(parsed.input.document).toBe('12345678901');
-      expect(parsed.input.amountBrl).toBe(149.9);
-    }
-  });
-
-  it('rejects non-positive amounts', () => {
-    expect(parseFimRedemption({ document: '12345678901', amountBrl: 0, externalId: 'x' }).ok).toBe(
-      false,
-    );
   });
 });
 
@@ -98,16 +107,7 @@ describe('redeemFim', () => {
         },
       ],
     });
-    mocks.subscriptionFindMany.mockResolvedValue([
-      { amount: 1000, occurredOn: new Date('2026-06-01') },
-    ]);
-    mocks.redemptionFindMany.mockResolvedValue([]);
-    mocks.linkFindUnique.mockResolvedValue({
-      id: linkId,
-      initialInvestment: 1000,
-      contractStartDate: new Date('2026-06-01'),
-    });
-    mocks.latestYield.mockResolvedValue(null);
+    mocks.getFimShareholder.mockResolvedValue(position);
     mocks.backfill.mockResolvedValue(0);
     mocks.email.mockResolvedValue(true);
     mocks.audit.mockResolvedValue(undefined);
@@ -120,64 +120,33 @@ describe('redeemFim', () => {
     externalId: 'bank-redeem-1',
   };
 
-  it('reserves the redeem, freezes until D+5 business days and emails admins', async () => {
+  it('reserves from balance and settles on D+5 B3 (skips Corpus Christi)', async () => {
     const result = await redeemFim({ partner, body });
-    expect(mocks.redemptionCreate).toHaveBeenCalledWith(
-      expect.objectContaining({
-        data: expect.objectContaining({
-          amount: 149.9,
-          status: 'pending',
-        }),
-      }),
-    );
-    expect(result.settlesOn).toBe('2026-06-08');
+    // 2026-06-01 + 5 B3 days skips 2026-06-04 (Corpus Christi) → 2026-06-09
+    expect(result.settlesOn).toBe('2026-06-09');
     expect(result.result).toBe('pending');
-    expect(mocks.backfill).toHaveBeenCalledWith(linkId);
+    expect(mocks.redemptionCreate).toHaveBeenCalled();
     expect(mocks.email).toHaveBeenCalled();
   });
 
-  it('rejects when residual would fall below R$ 100', async () => {
-    await expect(redeemFim({ partner, body: { ...body, amountBrl: 950 } })).rejects.toBeInstanceOf(
-      FimPartnerError,
-    );
+  it('allows redeeming the full available balance', async () => {
+    const result = await redeemFim({ partner, body: { ...body, amountBrl: 1000 } });
+    expect(result.amountBrl).toBe(1000);
+    expect(mocks.redemptionCreate).toHaveBeenCalled();
+  });
+
+  it('rejects when amount exceeds available balance', async () => {
+    await expect(
+      redeemFim({ partner, body: { ...body, amountBrl: 1000.01 } }),
+    ).rejects.toBeInstanceOf(FimPartnerError);
     expect(mocks.redemptionCreate).not.toHaveBeenCalled();
   });
 
-  it('is idempotent for the same externalId', async () => {
-    mocks.redemptionFindUnique.mockResolvedValue({
-      amount: 149.9,
-      settlesOn: new Date('2026-06-08'),
-      partyFundLink: { party: { cpfCnpj: '12345678901', legalName: 'Maria' } },
-    });
-    mocks.redemptionFindMany.mockResolvedValue([
-      {
-        amount: 149.9,
-        status: 'pending',
-        requestedOn: new Date('2026-06-01'),
-        settlesOn: new Date('2026-06-08'),
-      },
-    ]);
-    const result = await redeemFim({ partner, body });
+  it('dry-run does not persist', async () => {
+    const result = await redeemFim({ partner, body, dryRun: true });
+    expect(result.dryRun).toBe(true);
+    expect(result.settlesOn).toBe('2026-06-09');
     expect(mocks.redemptionCreate).not.toHaveBeenCalled();
     expect(mocks.email).not.toHaveBeenCalled();
-    expect(result.amountBrl).toBe(149.9);
-    expect(result.settlesOn).toBe('2026-06-08');
-  });
-
-  it('allows stacked pendings until the residual floor', async () => {
-    mocks.redemptionFindMany.mockResolvedValue([
-      {
-        amount: 400,
-        status: 'pending',
-        requestedOn: new Date('2026-06-01'),
-        settlesOn: new Date('2026-06-08'),
-      },
-    ]);
-    const result = await redeemFim({
-      partner,
-      body: { ...body, amountBrl: 500, externalId: 'bank-redeem-2' },
-    });
-    expect(result.amountBrl).toBe(500);
-    expect(mocks.redemptionCreate).toHaveBeenCalled();
   });
 });

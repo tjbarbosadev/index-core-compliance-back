@@ -287,10 +287,10 @@ export type FimYieldState = {
 /** Aporte datado. Entra no saldo depois do rendimento e do come-cotas do dia. */
 export type FimContribution = { date: string; amount: number };
 
-/** Janela [from, toExclusive) sem Selic nem come-cotas (caixa congelada por resgate). */
-export type FimFreezeWindow = { from: string; toExclusive: string };
+/** Janela [from, toExclusive): só `amount` deixa de render; o restante continua. */
+export type FimFreezeWindow = { from: string; toExclusive: string; amount: number };
 
-/** Resgate liquidado: reduz aportado e saldo na data, depois do rendimento do dia. */
+/** Resgate liquidado: reduz saldo (e principal até zerar) na data, depois do rendimento do dia. */
 export type FimSettlement = { date: string; amount: number };
 
 function contributionTotal(items: FimContribution[], upTo: string): number {
@@ -325,8 +325,12 @@ function settlementOn(items: FimSettlement[], date: string): number {
   return total;
 }
 
-function isFrozenOn(windows: FimFreezeWindow[], dateStr: string): boolean {
-  return windows.some((window) => dateStr >= window.from && dateStr < window.toExclusive);
+function frozenAmountOn(windows: FimFreezeWindow[], dateStr: string): number {
+  let total = 0;
+  for (const window of windows) {
+    if (dateStr >= window.from && dateStr < window.toExclusive) total += window.amount;
+  }
+  return total;
 }
 
 /**
@@ -334,7 +338,7 @@ function isFrozenOn(windows: FimFreezeWindow[], dateStr: string): boolean {
  * O primeiro dia só não rende quando `accrueFromFirstDay` é falso (data de cotização).
  * Come-cotas reduz o saldo e a base que segue rendendo.
  * Com `contributions`, cada aporte soma no principal só a partir do próprio dia.
- * `freezeWindows` pausam Selic/come-cotas; `settlements` reduzem aportado após o dia.
+ * `freezeWindows` congelam só `amount` (resto rende); `settlements` reduzem saldo após o dia.
  */
 export function generateFimYieldChunk(params: {
   investment: number;
@@ -459,15 +463,16 @@ function generateFimYieldChunkFromContributions(params: {
   let balance = opening.balance;
   let taxBasis = opening.taxBasis;
   let yieldAccumulated = opening.yieldAccumulated;
-  let previous = opening.balance;
 
   for (let d = parseYYYYMMDD(fromDate); toYYYYMMDD(d) <= endDate; d = addDays(d, 1)) {
     const dateStr = toYYYYMMDD(d);
     const selic = getSelicForDate(dateStr);
     const isContractStart = dateStr === fromDate && !accrueFromFirstDay;
-    const frozen = isFrozenOn(freezeWindows, dateStr);
-    const principal =
-      contributionTotal(contributions, dateStr) - settlementTotal(settlements, dateStr);
+    const frozenAmt = Math.min(balance, Math.max(0, frozenAmountOn(freezeWindows, dateStr)));
+    const principal = Math.max(
+      0,
+      contributionTotal(contributions, dateStr) - settlementTotal(settlements, dateStr),
+    );
     let yieldDay = 0;
     let hadWithdraw = false;
     let withdrawAmount: number | null = null;
@@ -478,10 +483,21 @@ function generateFimYieldChunkFromContributions(params: {
       yieldAccumulated = 0;
       yieldDay = 0;
     } else {
-      if (!frozen && isWeekday(d)) {
-        balance *= fimDailyFactor(selic.selicFactor);
+      // Liquidação no início do settlesOn (antes do rendimento do dia), para o
+      // valor reservado sair sem gerar residual quando o freeze era total.
+      const redeemed = settlementOn(settlements, dateStr);
+      if (redeemed > 0) {
+        balance = Math.max(0, balance - redeemed);
+        taxBasis = Math.min(taxBasis, balance);
       }
-      if (!frozen && isFimComeCotasDay(dateStr)) {
+      const balanceBeforeAccrue = balance;
+      const frozenAfterSettle = Math.min(balance, Math.max(0, frozenAmt));
+      if (isWeekday(d)) {
+        const accruable = Math.max(0, balance - frozenAfterSettle);
+        const factor = fimDailyFactor(selic.selicFactor);
+        balance = accruable * factor + frozenAfterSettle;
+      }
+      if (isFimComeCotasDay(dateStr)) {
         const gain = balance - taxBasis;
         if (gain > 0) {
           withdrawAmount = gain * FIM_COME_COTAS_RATE;
@@ -490,21 +506,15 @@ function generateFimYieldChunkFromContributions(params: {
           hadWithdraw = true;
         }
       }
-      yieldDay = balance - previous;
+      yieldDay = balance - balanceBeforeAccrue;
       const added = contributionOn(contributions, dateStr);
       if (added > 0) {
         balance += added;
         taxBasis += added;
       }
-      const redeemed = settlementOn(settlements, dateStr);
-      if (redeemed > 0) {
-        balance -= redeemed;
-        taxBasis -= redeemed;
-      }
       yieldAccumulated = balance - principal;
     }
 
-    previous = balance;
     days.push({
       referenceDate: dateStr,
       selicAnual: selic.selicAnual,

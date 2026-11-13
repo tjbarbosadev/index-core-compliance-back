@@ -1,5 +1,6 @@
 import type { Express, NextFunction, Request, Response } from 'express';
 import {
+  FIM_SCOPE_CANCELLATIONS_WRITE,
   FIM_SCOPE_REDEMPTIONS_WRITE,
   FIM_SCOPE_SHAREHOLDERS_READ,
   FIM_SCOPE_SUBSCRIPTIONS_WRITE,
@@ -13,6 +14,7 @@ import {
   subscribeFim,
 } from '../services/fim-subscription.service.js';
 import { parseFimRedemption, redeemFim } from '../services/fim-redemption.service.js';
+import { cancelFim, parseFimCancellation } from '../services/fim-cancellation.service.js';
 
 type PartnerRequest = Request & { partner?: AuthenticatedPartner };
 
@@ -43,6 +45,13 @@ function queryString(value: unknown): string | undefined {
   return typeof value === 'string' && value.length > 0 ? value : undefined;
 }
 
+function isDryRun(req: Request): boolean {
+  const raw = req.header('x-fim-dry-run');
+  if (!raw) return false;
+  const value = raw.trim().toLowerCase();
+  return value === '1' || value === 'true' || value === 'yes';
+}
+
 export function registerFimPartnerRoutes(app: Express, guards: Guards) {
   const { requirePartner, logPartnerAccess } = guards;
 
@@ -62,6 +71,7 @@ export function registerFimPartnerRoutes(app: Express, guards: Guards) {
           partner: { id: req.partner!.id, name: req.partner!.name },
           body: parsed.input,
           ip: clientIp(req),
+          dryRun: isDryRun(req),
         });
         res.status(200).json(result);
       } catch (err) {
@@ -91,6 +101,7 @@ export function registerFimPartnerRoutes(app: Express, guards: Guards) {
           partner: { id: req.partner!.id, name: req.partner!.name },
           body: parsed.input,
           ip: clientIp(req),
+          dryRun: isDryRun(req),
         });
         res.status(200).json(result);
       } catch (err) {
@@ -100,6 +111,36 @@ export function registerFimPartnerRoutes(app: Express, guards: Guards) {
         }
         console.error('[v1/fim/redemptions]', err);
         res.status(500).json({ error: 'Erro ao registrar resgate' });
+      }
+    },
+  );
+
+  app.post(
+    '/v1/fim/cancellations',
+    requirePartner,
+    logPartnerAccess,
+    requireScope(FIM_SCOPE_CANCELLATIONS_WRITE),
+    async (req: PartnerRequest, res: Response) => {
+      const parsed = parseFimCancellation(req.body);
+      if (!parsed.ok) {
+        res.status(400).json({ error: parsed.message });
+        return;
+      }
+      try {
+        const result = await cancelFim({
+          partner: { id: req.partner!.id, name: req.partner!.name },
+          body: parsed.input,
+          ip: clientIp(req),
+          dryRun: isDryRun(req),
+        });
+        res.status(200).json(result);
+      } catch (err) {
+        if (err instanceof FimPartnerError) {
+          res.status(err.status).json({ error: err.message });
+          return;
+        }
+        console.error('[v1/fim/cancellations]', err);
+        res.status(500).json({ error: 'Erro ao cancelar operação' });
       }
     },
   );

@@ -1,15 +1,15 @@
 import { prisma } from '../db/index.js';
 import { digitsOnly } from '../lib/party.js';
+import { addB3BusinessDays } from '../lib/b3-calendar.js';
 import { logAudit } from './audit.service.js';
 import { sendFimRedemptionNotice } from './email.service.js';
 import { backfillPartyFundLinkYields } from './cotista-yield.service.js';
 import {
-  FIM_MIN_BRL,
   FimPartnerError,
   getFimShareholder,
   type FimPositionView,
 } from './fim-subscription.service.js';
-import { addBusinessDays, parseYYYYMMDD, todayYYYYMMDD, toYYYYMMDD } from './quota-calculator.js';
+import { parseYYYYMMDD, todayYYYYMMDD, toYYYYMMDD } from './quota-calculator.js';
 
 export type FimRedemptionInput = {
   document: string;
@@ -24,9 +24,11 @@ export type FimRedeemResponse = {
   settlesOn: string;
   totalContributed: number;
   availableToRedeem: number;
+  frozenAmount: number;
   frozenUntil: string | null;
   balance: number;
   yieldAccumulated: number;
+  dryRun?: boolean;
 };
 
 function money(value: number): number {
@@ -73,6 +75,7 @@ function redeemPayload(
   view: FimPositionView,
   amountBrl: number,
   settlesOn: string,
+  dryRun?: boolean,
 ): FimRedeemResponse {
   return {
     document: view.document,
@@ -81,9 +84,11 @@ function redeemPayload(
     settlesOn,
     totalContributed: view.totalContributed,
     availableToRedeem: view.availableToRedeem,
+    frozenAmount: view.frozenAmount,
     frozenUntil: view.frozenUntil,
     balance: view.balance,
     yieldAccumulated: view.yieldAccumulated,
+    ...(dryRun ? { dryRun: true } : {}),
   };
 }
 
@@ -91,10 +96,12 @@ export async function redeemFim(input: {
   partner: { id: string; name: string };
   body: FimRedemptionInput;
   ip?: string | null;
+  dryRun?: boolean;
+  now?: Date;
 }): Promise<FimRedeemResponse> {
   const document = input.body.document;
-  const today = todayYYYYMMDD();
-  const settlesOn = toYYYYMMDD(addBusinessDays(parseYYYYMMDD(today), 5));
+  const today = todayYYYYMMDD(input.now);
+  const settlesOn = toYYYYMMDD(addB3BusinessDays(parseYYYYMMDD(today), 5));
 
   const duplicate = await prisma.fimRedemption.findUnique({
     where: {
@@ -103,11 +110,19 @@ export async function redeemFim(input: {
     include: { partyFundLink: { include: { party: true } } },
   });
   if (duplicate) {
+    if (duplicate.status === 'cancelled') {
+      throw new FimPartnerError(409, 'externalId já usado');
+    }
     if (duplicate.partyFundLink.party.cpfCnpj !== document) {
       throw new FimPartnerError(409, 'externalId já usado');
     }
     const view = await getFimShareholder(document);
-    return redeemPayload(view, money(Number(duplicate.amount)), toYYYYMMDD(duplicate.settlesOn));
+    return redeemPayload(
+      view,
+      money(Number(duplicate.amount)),
+      toYYYYMMDD(duplicate.settlesOn),
+      input.dryRun,
+    );
   }
 
   const party = await prisma.party.findFirst({
@@ -130,10 +145,26 @@ export async function redeemFim(input: {
   if (!link) throw new FimPartnerError(404, 'Posição FIM não encontrada');
 
   const viewBefore = await getFimShareholder(document);
-  if (input.body.amountBrl > viewBefore.availableToRedeem) {
+  if (input.body.amountBrl > viewBefore.availableToRedeem + 1e-9) {
     throw new FimPartnerError(
       400,
-      `amountBrl excede o disponível (máx. ${viewBefore.availableToRedeem.toFixed(2)}; residual mínimo ${FIM_MIN_BRL})`,
+      `amountBrl excede o saldo disponível (máx. ${viewBefore.availableToRedeem.toFixed(2)})`,
+    );
+  }
+
+  if (input.dryRun) {
+    return redeemPayload(
+      {
+        ...viewBefore,
+        pendingRedemptionTotal: money(viewBefore.pendingRedemptionTotal + input.body.amountBrl),
+        availableToRedeem: money(viewBefore.availableToRedeem - input.body.amountBrl),
+        frozenAmount: money(viewBefore.frozenAmount + input.body.amountBrl),
+        frozenUntil: settlesOn,
+        yielding: money(viewBefore.balance - viewBefore.frozenAmount - input.body.amountBrl) > 0,
+      },
+      input.body.amountBrl,
+      settlesOn,
+      true,
     );
   }
 

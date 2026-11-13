@@ -144,6 +144,13 @@ enum AmortizationKind {
 enum FimRedemptionStatus {
   pending
   settled
+  cancelled
+}
+
+enum FimSubscriptionStatus {
+  pending
+  active
+  cancelled
 }
 
 enum AmortizationAlertChannel {
@@ -670,19 +677,24 @@ model CotistaAmortization {
 
 /** Visual FIM application from a partner. Not a settled payment. */
 model FimSubscription {
-  id              String   @id @default(uuid()) @db.Uuid
-  partyFundLinkId String   @map("party_fund_link_id") @db.Uuid
-  partnerId       String   @map("partner_id") @db.Uuid
-  externalId      String   @map("external_id") @db.VarChar(128)
-  amount          Decimal  @db.Decimal(18, 2)
-  occurredOn      DateTime @map("occurred_on") @db.Date
-  createdAt       DateTime @default(now()) @map("created_at") @db.Timestamptz
+  id              String                @id @default(uuid()) @db.Uuid
+  partyFundLinkId String                @map("party_fund_link_id") @db.Uuid
+  partnerId       String                @map("partner_id") @db.Uuid
+  externalId      String                @map("external_id") @db.VarChar(128)
+  amount          Decimal               @db.Decimal(18, 2)
+  occurredOn      DateTime              @map("occurred_on") @db.Date
+  /** First calendar day the amount can sit in the box (Ipe cutoff). */
+  accruesOn       DateTime              @map("accrues_on") @db.Date
+  status          FimSubscriptionStatus @default(active)
+  requestedAt     DateTime              @default(now()) @map("requested_at") @db.Timestamptz
+  createdAt       DateTime              @default(now()) @map("created_at") @db.Timestamptz
 
   partyFundLink PartyFundLink @relation(fields: [partyFundLinkId], references: [id], onDelete: Cascade)
   partner       ApiPartner    @relation(fields: [partnerId], references: [id], onDelete: Restrict)
 
   @@unique([partnerId, externalId])
   @@index([partyFundLinkId, occurredOn])
+  @@index([partyFundLinkId, status, accruesOn])
   @@map("fim_subscriptions")
 }
 

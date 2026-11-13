@@ -349,7 +349,7 @@ export async function sendFimRedemptionNotice(input: {
   const subject = 'IndexCore — resgate visual FIM (caixinha)';
   const lines = [
     'Resgate visual vindo do app do banco. Não houve pagamento nem débito no fundo.',
-    'A caixinha inteira para de render até a liquidação (D+5 dias úteis).',
+    'Só o valor reservado para de render até a liquidação (D+5 dias úteis B3); o restante continua rendendo.',
     '',
     `Parceiro: ${input.partnerName}`,
     `Cliente: ${input.name}`,

@@ -3,6 +3,7 @@ import { digitsOnly } from '../lib/party.js';
 import { logAudit } from './audit.service.js';
 import { sendFimSubscriptionNotice } from './email.service.js';
 import { backfillPartyFundLinkYields, getLatestYieldOnOrBefore } from './cotista-yield.service.js';
+import { resolveAccruesOn } from './fim-timing.js';
 import {
   addDays,
   getVisualizationDate,
@@ -11,6 +12,7 @@ import {
   toYYYYMMDD,
 } from './quota-calculator.js';
 
+/** Mínimo só na primeira aplicação da caixinha. */
 export const FIM_MIN_BRL = 100;
 
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
@@ -49,8 +51,12 @@ export type FimPositionView = {
   startDate: string;
   visualizationDate: string;
   pendingRedemptionTotal: number;
+  /** Saldo ainda não reservado para resgate (pode zerar). */
   availableToRedeem: number;
+  /** Soma do valor reservado que não rende enquanto pendente. */
+  frozenAmount: number;
   frozenUntil: string | null;
+  /** True se há saldo além do congelado rendendo. */
   yielding: boolean;
 };
 
@@ -58,9 +64,12 @@ export type FimSubscribeResponse = {
   document: string;
   result: FimSubscriptionResult;
   amountBrl: number;
+  accruesOn: string;
+  status: 'pending' | 'active';
   totalContributed: number;
   balance: number;
   yieldAccumulated: number;
+  dryRun?: boolean;
 };
 
 function money(value: number): number {
@@ -88,8 +97,8 @@ export function parseFimSubscription(
   if (typeof body.amountBrl !== 'number' || !atMostTwoDecimals(body.amountBrl)) {
     return { ok: false, message: 'amountBrl deve ser um número com no máximo duas casas' };
   }
-  if (body.amountBrl < FIM_MIN_BRL) {
-    return { ok: false, message: 'amountBrl mínimo é 100' };
+  if (body.amountBrl <= 0) {
+    return { ok: false, message: 'amountBrl deve ser maior que zero' };
   }
   const externalId = typeof body.externalId === 'string' ? body.externalId.trim() : '';
   if (!externalId || externalId.length > 128) {
@@ -214,36 +223,38 @@ async function positionView(
   const today = todayYYYYMMDD();
   const [subscriptions, redemptions, link] = await Promise.all([
     prisma.fimSubscription.findMany({
-      where: { partyFundLinkId: linkId },
-      orderBy: { occurredOn: 'asc' },
+      where: { partyFundLinkId: linkId, status: { in: ['pending', 'active'] } },
+      orderBy: { accruesOn: 'asc' },
     }),
     prisma.fimRedemption.findMany({
-      where: { partyFundLinkId: linkId },
+      where: { partyFundLinkId: linkId, status: { in: ['pending', 'settled'] } },
       orderBy: { requestedOn: 'asc' },
     }),
     prisma.partyFundLink.findUnique({ where: { id: linkId } }),
   ]);
+  const countedSubs = subscriptions.filter(
+    (row) => row.status === 'active' || toYYYYMMDD(row.accruesOn) <= today,
+  );
   const grossContributed =
-    subscriptions.length > 0
-      ? subscriptions.reduce((sum, row) => sum + Number(row.amount), 0)
+    countedSubs.length > 0
+      ? countedSubs.reduce((sum, row) => sum + Number(row.amount), 0)
       : Number(link?.initialInvestment ?? 0);
   const settledRedeemed = redemptions
     .filter((row) => row.status === 'settled' || toYYYYMMDD(row.settlesOn) <= visualizationDate)
     .reduce((sum, row) => sum + Number(row.amount), 0);
+  const pendingReds = redemptions.filter(
+    (row) => row.status === 'pending' && toYYYYMMDD(row.settlesOn) > visualizationDate,
+  );
   const pendingRedemptionTotal = money(
-    redemptions
-      .filter((row) => row.status === 'pending' && toYYYYMMDD(row.settlesOn) > visualizationDate)
-      .reduce((sum, row) => sum + Number(row.amount), 0),
+    pendingReds.reduce((sum, row) => sum + Number(row.amount), 0),
   );
-  const totalContributed = money(grossContributed - settledRedeemed);
-  const availableToRedeem = money(
-    Math.max(0, totalContributed - pendingRedemptionTotal - FIM_MIN_BRL),
-  );
-  const activeFreezes = redemptions.filter((row) => {
+  const totalContributed = money(Math.max(0, grossContributed - settledRedeemed));
+  const activeFreezes = pendingReds.filter((row) => {
     const from = toYYYYMMDD(row.requestedOn);
     const toExclusive = toYYYYMMDD(row.settlesOn);
     return today >= from && today < toExclusive;
   });
+  const frozenAmount = money(activeFreezes.reduce((sum, row) => sum + Number(row.amount), 0));
   const frozenUntil =
     activeFreezes.length > 0
       ? activeFreezes
@@ -253,8 +264,8 @@ async function positionView(
       : null;
   const latest = await getLatestYieldOnOrBefore(linkId, visualizationDate);
   const latestDate = latest ? toYYYYMMDD(latest.referenceDate) : null;
-  const pendingSubs = subscriptions
-    .filter((row) => !latestDate || toYYYYMMDD(row.occurredOn) > latestDate)
+  const pendingSubs = countedSubs
+    .filter((row) => !latestDate || toYYYYMMDD(row.accruesOn) > latestDate)
     .reduce((sum, row) => sum + Number(row.amount), 0);
   const pendingSettledRedemptions = redemptions
     .filter((row) => {
@@ -265,8 +276,9 @@ async function positionView(
   const balance = money(
     (latest ? Number(latest.balanceTotal) : 0) + pendingSubs - pendingSettledRedemptions,
   );
+  const availableToRedeem = money(Math.max(0, balance - pendingRedemptionTotal));
   const startDate =
-    (subscriptions[0] ? toYYYYMMDD(subscriptions[0].occurredOn) : null) ??
+    (countedSubs[0] ? toYYYYMMDD(countedSubs[0].accruesOn) : null) ??
     (link?.contractStartDate ? toYYYYMMDD(link.contractStartDate) : visualizationDate);
   return {
     name,
@@ -280,8 +292,9 @@ async function positionView(
     visualizationDate,
     pendingRedemptionTotal,
     availableToRedeem,
+    frozenAmount,
     frozenUntil,
-    yielding: frozenUntil === null,
+    yielding: money(Math.max(0, balance - frozenAmount)) > 0,
   };
 }
 
@@ -289,14 +302,20 @@ function subscribePayload(
   view: FimPositionView,
   result: FimSubscriptionResult,
   amountBrl: number,
+  accruesOn: string,
+  status: 'pending' | 'active',
+  dryRun?: boolean,
 ): FimSubscribeResponse {
   return {
     document: view.document,
     result,
     amountBrl,
+    accruesOn,
+    status,
     totalContributed: view.totalContributed,
     balance: view.balance,
     yieldAccumulated: view.yieldAccumulated,
+    ...(dryRun ? { dryRun: true } : {}),
   };
 }
 
@@ -304,10 +323,14 @@ export async function subscribeFim(input: {
   partner: { id: string; name: string };
   body: FimSubscriptionInput;
   ip?: string | null;
+  dryRun?: boolean;
+  now?: Date;
 }): Promise<FimSubscribeResponse> {
   const fund = await resolveFimFund(input.body.fundId);
   const document = input.body.document;
-  const today = todayYYYYMMDD();
+  const today = todayYYYYMMDD(input.now);
+  const accruesOn = resolveAccruesOn(input.now);
+  const status: 'pending' | 'active' = accruesOn > today ? 'pending' : 'active';
 
   const duplicate = await prisma.fimSubscription.findUnique({
     where: {
@@ -316,6 +339,9 @@ export async function subscribeFim(input: {
     include: { partyFundLink: { include: { party: true } } },
   });
   if (duplicate) {
+    if (duplicate.status === 'cancelled') {
+      throw new FimPartnerError(409, 'externalId já usado');
+    }
     if (
       duplicate.partyFundLink.party.cpfCnpj !== document ||
       duplicate.partyFundLink.fundId !== fund.id
@@ -325,6 +351,7 @@ export async function subscribeFim(input: {
     const earlier = await prisma.fimSubscription.count({
       where: {
         partyFundLinkId: duplicate.partyFundLinkId,
+        status: { not: 'cancelled' },
         OR: [
           { occurredOn: { lt: duplicate.occurredOn } },
           { occurredOn: duplicate.occurredOn, createdAt: { lt: duplicate.createdAt } },
@@ -340,13 +367,74 @@ export async function subscribeFim(input: {
       view,
       earlier === 0 ? 'created' : 'toppedUp',
       money(Number(duplicate.amount)),
+      toYYYYMMDD(duplicate.accruesOn),
+      duplicate.status === 'pending' ? 'pending' : 'active',
+      input.dryRun,
     );
   }
 
   const party = await prisma.party.findFirst({
     where: { cpfCnpj: document, deletedAt: null },
-    include: { cotista: true, partyFundLinks: true },
+    include: { cotista: true, partyFundLinks: { include: { fund: true } } },
   });
+
+  const existingFimLink = party?.partyFundLinks.find(
+    (link) => link.fundId === fund.id && link.quotaType === 'unica',
+  );
+  const isFirst = !existingFimLink;
+  if (isFirst && input.body.amountBrl < FIM_MIN_BRL) {
+    throw new FimPartnerError(400, `amountBrl mínimo na primeira aplicação é ${FIM_MIN_BRL}`);
+  }
+
+  if (input.dryRun) {
+    const syntheticView: FimPositionView = {
+      name: input.body.name,
+      document,
+      totalContributed: money(
+        (existingFimLink ? Number(existingFimLink.initialInvestment) : 0) + input.body.amountBrl,
+      ),
+      quotaCount: 0,
+      balance: money(
+        (existingFimLink ? Number(existingFimLink.currentPrincipal) : 0) + input.body.amountBrl,
+      ),
+      yieldDay: 0,
+      yieldAccumulated: 0,
+      startDate: existingFimLink?.contractStartDate
+        ? toYYYYMMDD(existingFimLink.contractStartDate)
+        : accruesOn,
+      visualizationDate: toYYYYMMDD(getVisualizationDate()),
+      pendingRedemptionTotal: 0,
+      availableToRedeem: 0,
+      frozenAmount: 0,
+      frozenUntil: null,
+      yielding: true,
+    };
+    if (existingFimLink) {
+      const live = await positionView(existingFimLink.id, party!.legalName, document);
+      return subscribePayload(
+        {
+          ...live,
+          totalContributed: money(live.totalContributed + input.body.amountBrl),
+          balance: money(live.balance + input.body.amountBrl),
+        },
+        'toppedUp',
+        input.body.amountBrl,
+        accruesOn,
+        status,
+        true,
+      );
+    }
+    syntheticView.quotaCount = syntheticView.totalContributed;
+    syntheticView.availableToRedeem = syntheticView.balance;
+    return subscribePayload(
+      syntheticView,
+      'created',
+      input.body.amountBrl,
+      accruesOn,
+      status,
+      true,
+    );
+  }
 
   const created = await prisma.$transaction(async (tx) => {
     let partyId = party?.id;
@@ -414,7 +502,7 @@ export async function subscribeFim(input: {
           currentPrincipal: input.body.amountBrl,
           quotaAmount: input.body.amountBrl,
           quotaCount: Math.round(input.body.amountBrl),
-          contractStartDate: parseYYYYMMDD(today),
+          contractStartDate: parseYYYYMMDD(accruesOn),
         },
       });
       linkId = link.id;
@@ -428,17 +516,22 @@ export async function subscribeFim(input: {
         externalId: input.body.externalId,
         amount: input.body.amountBrl,
         occurredOn: parseYYYYMMDD(today),
+        accruesOn: parseYYYYMMDD(accruesOn),
+        status,
+        requestedAt: input.now ?? new Date(),
       },
     });
 
     if (result === 'toppedUp') {
       const [rows, settled] = await Promise.all([
-        tx.fimSubscription.findMany({ where: { partyFundLinkId: linkId } }),
+        tx.fimSubscription.findMany({
+          where: { partyFundLinkId: linkId, status: { not: 'cancelled' } },
+        }),
         tx.fimRedemption.findMany({ where: { partyFundLinkId: linkId, status: 'settled' } }),
       ]);
       const gross = rows.reduce((sum, row) => sum + Number(row.amount), 0);
       const redeemed = settled.reduce((sum, row) => sum + Number(row.amount), 0);
-      const total = money(gross - redeemed);
+      const total = money(Math.max(0, gross - redeemed));
       await tx.partyFundLink.update({
         where: { id: linkId },
         data: {
@@ -456,7 +549,7 @@ export async function subscribeFim(input: {
   await backfillPartyFundLinkYields(created.linkId);
 
   const view = await positionView(created.linkId, input.body.name, document);
-  const payload = subscribePayload(view, created.result, input.body.amountBrl);
+  const payload = subscribePayload(view, created.result, input.body.amountBrl, accruesOn, status);
 
   await logAudit({
     action: 'fim.subscription',
@@ -467,6 +560,8 @@ export async function subscribeFim(input: {
       externalId: input.body.externalId,
       amountBrl: input.body.amountBrl,
       result: created.result,
+      accruesOn,
+      status,
       document,
       excludeFromPl: created.createdParty,
     },
