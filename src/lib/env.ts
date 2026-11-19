@@ -114,6 +114,14 @@ export const env = {
     '',
   ),
   nextcorefimApiServiceKey: process.env.NEXTCOREFIM_API_SERVICE_KEY?.trim() || '',
+  /** Mega vault HTTP (base sem barra final) — documentos de parceiros; vazio: modo vault off. */
+  megaVaultUrl: process.env.MEGA_VAULT_URL?.trim().replace(/\/$/, '') || '',
+  megaVaultApiKey: process.env.MEGA_VAULT_API_KEY?.trim() || '',
+  /** Conta Mega via MEGAcmd (preferida sobre o vault quando e-mail e senha existem). */
+  megaEmail: process.env.MEGA_EMAIL?.trim() || '',
+  megaPassword: process.env.MEGA_PASSWORD?.trim() || '',
+  /** Somente dev local: executa mega-* via `docker exec` neste container. */
+  megacmdContainer: process.env.MEGACMD_CONTAINER?.trim() || undefined,
   /** Ingest de propostas dos sites FIDC/FIM — key vazia: POST /internal/proposals retorna 503. */
   proposalIngestServiceKey: process.env.PROPOSAL_INGEST_SERVICE_KEY?.trim() || '',
   /** E-mail oficial da Ipebank: contato nos envelopes ZapSign e avisos do onboarding de cedentes. */
