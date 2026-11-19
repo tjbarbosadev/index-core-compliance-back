@@ -1,0 +1,737 @@
+openapi: 3.0.3
+info:
+  title: Ipe Core — API parceiro FIM (caixinha + documentos)
+  description: |
+    Integração server-to-server do banco com a Index Core.
+
+    - **Caixinha:** aplicação, resgate, cancelamento, saldo e rendimentos (valores visuais; sem PIX/liquidação no fundo).
+    - **Documentos:** anexos genéricos no Mega (não são slots KYC).
+
+    Chame apenas do backend do banco (`Authorization: Bearer opc_…`). Não use o token no app nem no browser.
+    Rate limit: **120 req/min**. Acima disso: `429` + `Retry-After`.
+
+    Dry-run (`X-Fim-Dry-Run: 1|true|yes`) vale **somente** para escrita da caixinha. Em documentos o header é ignorado.
+  version: '1.1.0'
+  contact:
+    name: Index Core
+    email: contato@indexcore.com.br
+
+servers:
+  - url: https://api.admin.opcore.com.br
+    description: Produção (único ambiente)
+
+tags:
+  - name: Caixinha
+    description: Aplicação, resgate, cancelamento, posição e rendimentos do cotista FIM
+  - name: Documentos
+    description: Anexos genéricos por CPF/CNPJ (Mega); isolados por token do parceiro
+
+security:
+  - PartnerBearer: []
+
+paths:
+  /v1/fim/subscriptions:
+    post:
+      tags: [Caixinha]
+      operationId: createFimSubscription
+      summary: Registrar aplicação (aporte)
+      description: |
+        Primeira aplicação do documento: `amountBrl` mínimo **100**.
+        Aportes seguintes: qualquer valor **> 0** (até 2 casas).
+        `externalId` único por token; após cancelamento não reutiliza (409).
+      security:
+        - PartnerBearer: [fim.subscriptions.write]
+      parameters:
+        - $ref: '#/components/parameters/DryRunHeader'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SubscriptionRequest'
+            examples:
+              aporte:
+                value:
+                  name: Maria Exemplo
+                  document: '12345678901'
+                  email: maria@example.com
+                  phone: '11999990000'
+                  amountBrl: 100
+                  externalId: bank-op-1
+      responses:
+        '200':
+          description: Aplicação registrada (ou simulada se dry-run)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SubscriptionResponse'
+        '400':
+          $ref: '#/components/responses/Error400'
+        '401':
+          $ref: '#/components/responses/Error401'
+        '403':
+          $ref: '#/components/responses/Error403'
+        '409':
+          $ref: '#/components/responses/Error409'
+        '429':
+          $ref: '#/components/responses/Error429'
+
+  /v1/fim/redemptions:
+    post:
+      tags: [Caixinha]
+      operationId: createFimRedemption
+      summary: Registrar resgate
+      description: |
+        Sai do **saldo** (principal + rendimento). Pode zerar a caixinha.
+        Reserva o valor no pedido (só esse montante deixa de render).
+        Liquidação em **D+5 úteis B3** (`settlesOn`).
+        Teto = `availableToRedeem`.
+      security:
+        - PartnerBearer: [fim.redemptions.write]
+      parameters:
+        - $ref: '#/components/parameters/DryRunHeader'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RedemptionRequest'
+            examples:
+              resgate:
+                value:
+                  document: '12345678901'
+                  amountBrl: 149.9
+                  externalId: bank-redeem-1
+      responses:
+        '200':
+          description: Resgate registrado (ou simulado se dry-run)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RedemptionResponse'
+        '400':
+          $ref: '#/components/responses/Error400'
+        '401':
+          $ref: '#/components/responses/Error401'
+        '403':
+          $ref: '#/components/responses/Error403'
+        '404':
+          $ref: '#/components/responses/Error404'
+        '409':
+          $ref: '#/components/responses/Error409'
+        '429':
+          $ref: '#/components/responses/Error429'
+
+  /v1/fim/cancellations:
+    post:
+      tags: [Caixinha]
+      operationId: cancelFimOperation
+      summary: Cancelar aplicação ou resgate pendente
+      description: |
+        Aplicação: só com `status` `pending` (ainda não começou a render).
+        Resgate: só com `status` `pending` (antes de `settlesOn`).
+        O mesmo `externalId` não pode ser reusado depois (409).
+      security:
+        - PartnerBearer: [fim.cancellations.write]
+      parameters:
+        - $ref: '#/components/parameters/DryRunHeader'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CancellationRequest'
+            examples:
+              cancelSubscription:
+                value:
+                  kind: subscription
+                  externalId: bank-op-1
+              cancelRedemption:
+                value:
+                  kind: redemption
+                  externalId: bank-redeem-1
+      responses:
+        '200':
+          description: Cancelamento aplicado (ou simulado se dry-run)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CancellationResponse'
+        '400':
+          $ref: '#/components/responses/Error400'
+        '401':
+          $ref: '#/components/responses/Error401'
+        '403':
+          $ref: '#/components/responses/Error403'
+        '404':
+          $ref: '#/components/responses/Error404'
+        '409':
+          $ref: '#/components/responses/Error409'
+        '429':
+          $ref: '#/components/responses/Error429'
+
+  /v1/fim/shareholders/{document}:
+    get:
+      tags: [Caixinha]
+      operationId: getFimShareholder
+      summary: Números básicos da caixinha
+      security:
+        - PartnerBearer: [fim.shareholders.read]
+      parameters:
+        - $ref: '#/components/parameters/DocumentPath'
+      responses:
+        '200':
+          description: Posição do cotista
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ShareholderResponse'
+        '401':
+          $ref: '#/components/responses/Error401'
+        '403':
+          $ref: '#/components/responses/Error403'
+        '404':
+          $ref: '#/components/responses/Error404'
+        '429':
+          $ref: '#/components/responses/Error429'
+
+  /v1/fim/shareholders/{document}/yields:
+    get:
+      tags: [Caixinha]
+      operationId: getFimShareholderYields
+      summary: Série diária de rendimentos
+      description: Use `days=30|60|90` **ou** `from`+`to`. Não misture.
+      security:
+        - PartnerBearer: [fim.shareholders.read]
+      parameters:
+        - $ref: '#/components/parameters/DocumentPath'
+        - name: days
+          in: query
+          schema:
+            type: integer
+            enum: [30, 60, 90]
+          description: Janela em dias (alternativa a from/to)
+        - name: from
+          in: query
+          schema:
+            type: string
+            format: date
+          description: Início YYYY-MM-DD (com `to`)
+        - name: to
+          in: query
+          schema:
+            type: string
+            format: date
+          description: Fim YYYY-MM-DD (com `from`)
+      responses:
+        '200':
+          description: Série de rendimentos
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/YieldsResponse'
+        '400':
+          $ref: '#/components/responses/Error400'
+        '401':
+          $ref: '#/components/responses/Error401'
+        '403':
+          $ref: '#/components/responses/Error403'
+        '404':
+          $ref: '#/components/responses/Error404'
+        '429':
+          $ref: '#/components/responses/Error429'
+
+  /v1/fim/shareholders/{document}/documents:
+    post:
+      tags: [Documentos]
+      operationId: uploadPartnerDocument
+      summary: Enviar anexo (multipart)
+      description: |
+        MIME: `application/pdf`, `image/jpeg`, `image/png`, `image/webp`. Máx. **12 MB**.
+        Auto-create: se o CPF/CNPJ não existir, cria Party+Cotista e **exige** `name`.
+        Deduplicação por `sha256`: mesmo conteúdo devolve `200` com `created: false`.
+        `X-Fim-Dry-Run` **não** se aplica.
+      security:
+        - PartnerBearer: [fim.documents.write]
+      parameters:
+        - $ref: '#/components/parameters/DocumentPath'
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file]
+              properties:
+                file:
+                  type: string
+                  format: binary
+                  description: Arquivo binário
+                name:
+                  type: string
+                  description: Obrigatório se for criar o cotista
+                cotistaId:
+                  type: string
+                  format: uuid
+                  description: Conferência; deve bater com o document do path
+                label:
+                  type: string
+                  maxLength: 120
+                  description: Rótulo livre
+      responses:
+        '201':
+          description: Anexo criado
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DocumentUploadResponse'
+        '200':
+          description: Deduplicação (mesmo sha256) — registro existente
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DocumentUploadResponse'
+        '400':
+          $ref: '#/components/responses/Error400'
+        '401':
+          $ref: '#/components/responses/Error401'
+        '403':
+          $ref: '#/components/responses/Error403'
+        '409':
+          $ref: '#/components/responses/Error409'
+        '429':
+          $ref: '#/components/responses/Error429'
+        '502':
+          $ref: '#/components/responses/Error502'
+        '503':
+          $ref: '#/components/responses/Error503'
+    get:
+      tags: [Documentos]
+      operationId: listPartnerDocuments
+      summary: Listar anexos do cotista
+      description: Só retorna anexos enviados pelo **seu** token.
+      security:
+        - PartnerBearer: [fim.documents.read]
+      parameters:
+        - $ref: '#/components/parameters/DocumentPath'
+        - name: cotistaId
+          in: query
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Lista de anexos (sem IDs internos do Mega)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DocumentListResponse'
+        '401':
+          $ref: '#/components/responses/Error401'
+        '403':
+          $ref: '#/components/responses/Error403'
+        '404':
+          $ref: '#/components/responses/Error404'
+        '429':
+          $ref: '#/components/responses/Error429'
+
+  /v1/fim/shareholders/{document}/documents/{fileId}:
+    get:
+      tags: [Documentos]
+      operationId: downloadPartnerDocument
+      summary: Baixar anexo (binário)
+      security:
+        - PartnerBearer: [fim.documents.read]
+      parameters:
+        - $ref: '#/components/parameters/DocumentPath'
+        - $ref: '#/components/parameters/FileIdPath'
+        - name: disposition
+          in: query
+          schema:
+            type: string
+            enum: [inline, attachment]
+            default: attachment
+      responses:
+        '200':
+          description: Conteúdo binário do arquivo
+          content:
+            application/pdf:
+              schema:
+                type: string
+                format: binary
+            image/jpeg:
+              schema:
+                type: string
+                format: binary
+            image/png:
+              schema:
+                type: string
+                format: binary
+            image/webp:
+              schema:
+                type: string
+                format: binary
+          headers:
+            Content-Disposition:
+              schema:
+                type: string
+        '401':
+          $ref: '#/components/responses/Error401'
+        '403':
+          $ref: '#/components/responses/Error403'
+        '404':
+          $ref: '#/components/responses/Error404'
+        '429':
+          $ref: '#/components/responses/Error429'
+        '502':
+          $ref: '#/components/responses/Error502'
+        '503':
+          $ref: '#/components/responses/Error503'
+    delete:
+      tags: [Documentos]
+      operationId: deletePartnerDocument
+      summary: Apagar anexo (Mega + registro; sem lixeira)
+      security:
+        - PartnerBearer: [fim.documents.write]
+      parameters:
+        - $ref: '#/components/parameters/DocumentPath'
+        - $ref: '#/components/parameters/FileIdPath'
+      responses:
+        '200':
+          description: Removido
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DocumentDeleteResponse'
+        '401':
+          $ref: '#/components/responses/Error401'
+        '403':
+          $ref: '#/components/responses/Error403'
+        '404':
+          $ref: '#/components/responses/Error404'
+        '429':
+          $ref: '#/components/responses/Error429'
+        '502':
+          $ref: '#/components/responses/Error502'
+        '503':
+          $ref: '#/components/responses/Error503'
+
+components:
+  securitySchemes:
+    PartnerBearer:
+      type: http
+      scheme: bearer
+      bearerFormat: opc_…
+      description: |
+        Token de parceiro (`opc_…`), sem expiração até revogar/rotacionar.
+        Scopes por rota: `fim.subscriptions.write`, `fim.redemptions.write`,
+        `fim.cancellations.write`, `fim.shareholders.read`,
+        `fim.documents.read`, `fim.documents.write`.
+
+  parameters:
+    DocumentPath:
+      name: document
+      in: path
+      required: true
+      description: CPF (11) ou CNPJ (14), só dígitos (pontuação é removida)
+      schema:
+        type: string
+        pattern: '^[0-9]{11}([0-9]{3})?$'
+        example: '12345678901'
+    FileIdPath:
+      name: fileId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    DryRunHeader:
+      name: X-Fim-Dry-Run
+      in: header
+      required: false
+      description: |
+        `1`, `true` ou `yes` — valida e calcula sem gravar (só caixinha).
+        Resposta inclui `"dryRun": true`.
+      schema:
+        type: string
+        enum: ['1', 'true', 'yes']
+
+  schemas:
+    ErrorBody:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: string
+          description: Mensagem em português
+          example: Escopo ausente
+
+    SubscriptionRequest:
+      type: object
+      required: [name, document, amountBrl, externalId]
+      properties:
+        name:
+          type: string
+        document:
+          type: string
+          description: CPF/CNPJ só dígitos
+        email:
+          type: string
+          format: email
+        phone:
+          type: string
+        amountBrl:
+          type: number
+          exclusiveMinimum: 0
+          multipleOf: 0.01
+        externalId:
+          type: string
+          description: Idempotência por token
+
+    SubscriptionResponse:
+      type: object
+      properties:
+        dryRun:
+          type: boolean
+        accruesOn:
+          type: string
+          format: date
+          description: Data em que o aporte começa a poder render (corte B3)
+        status:
+          type: string
+          enum: [pending, active]
+        externalId:
+          type: string
+        document:
+          type: string
+        amountBrl:
+          type: number
+
+    RedemptionRequest:
+      type: object
+      required: [document, amountBrl, externalId]
+      properties:
+        document:
+          type: string
+        amountBrl:
+          type: number
+          exclusiveMinimum: 0
+          multipleOf: 0.01
+        externalId:
+          type: string
+
+    RedemptionResponse:
+      type: object
+      properties:
+        dryRun:
+          type: boolean
+        settlesOn:
+          type: string
+          format: date
+          description: Liquidação D+5 úteis B3
+        status:
+          type: string
+          enum: [pending, settled, cancelled]
+        externalId:
+          type: string
+        document:
+          type: string
+        amountBrl:
+          type: number
+        availableToRedeem:
+          type: number
+
+    CancellationRequest:
+      type: object
+      required: [kind, externalId]
+      properties:
+        kind:
+          type: string
+          enum: [subscription, redemption]
+        externalId:
+          type: string
+
+    CancellationResponse:
+      type: object
+      properties:
+        dryRun:
+          type: boolean
+        ok:
+          type: boolean
+        kind:
+          type: string
+          enum: [subscription, redemption]
+        externalId:
+          type: string
+
+    ShareholderResponse:
+      type: object
+      properties:
+        document:
+          type: string
+        totalContributed:
+          type: number
+          description: Aportado líquido de resgates já liquidados
+        balance:
+          type: number
+          description: Saldo marcado a mercado
+        pendingRedemptionTotal:
+          type: number
+          description: Valor reservado que não rende
+        frozenAmount:
+          type: number
+        availableToRedeem:
+          type: number
+          description: balance − pendingRedemptionTotal
+        frozenUntil:
+          type: string
+          format: date
+          nullable: true
+          description: Maior settlesOn ativo, ou null
+        yielding:
+          type: boolean
+          description: Há saldo além do congelado
+
+    YieldsResponse:
+      type: object
+      properties:
+        document:
+          type: string
+        items:
+          type: array
+          items:
+            type: object
+            properties:
+              date:
+                type: string
+                format: date
+              amountBrl:
+                type: number
+
+    PartnerDocumentItem:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        label:
+          type: string
+          nullable: true
+        originalName:
+          type: string
+        mimeType:
+          type: string
+        size:
+          type: integer
+        sha256:
+          type: string
+          description: 64 hex
+        createdAt:
+          type: string
+          format: date-time
+
+    DocumentUploadResponse:
+      allOf:
+        - $ref: '#/components/schemas/PartnerDocumentItem'
+        - type: object
+          properties:
+            document:
+              type: string
+            cotistaId:
+              type: string
+              format: uuid
+            partyId:
+              type: string
+              format: uuid
+            created:
+              type: boolean
+              description: false na deduplicação
+
+    DocumentListResponse:
+      type: object
+      properties:
+        document:
+          type: string
+        cotistaId:
+          type: string
+          format: uuid
+        partyId:
+          type: string
+          format: uuid
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/PartnerDocumentItem'
+
+    DocumentDeleteResponse:
+      type: object
+      properties:
+        ok:
+          type: boolean
+        id:
+          type: string
+          format: uuid
+        document:
+          type: string
+        cotistaId:
+          type: string
+          format: uuid
+        partyId:
+          type: string
+          format: uuid
+
+  responses:
+    Error400:
+      description: Validação / regra de negócio
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorBody'
+    Error401:
+      description: Token ausente ou inválido
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorBody'
+    Error403:
+      description: Escopo ausente
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorBody'
+          example:
+            error: Escopo ausente
+    Error404:
+      description: Recurso inexistente
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorBody'
+    Error409:
+      description: Conflito (externalId / cotistaId vs document)
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorBody'
+    Error429:
+      description: Rate limit (120 req/min)
+      headers:
+        Retry-After:
+          schema:
+            type: integer
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorBody'
+    Error502:
+      description: Falha ao falar com o Mega
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorBody'
+    Error503:
+      description: Mega não configurado
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorBody'

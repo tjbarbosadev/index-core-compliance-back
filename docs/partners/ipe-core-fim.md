@@ -2,6 +2,14 @@
 
 Guia para o backend do banco. A Index registra a aplicação e calcula o rendimento. Não há PIX, liquidação nem crédito no fundo: o valor é visual.
 
+## Spec OpenAPI (Swagger)
+
+Contrato máquina-legível (tags **Caixinha** e **Documentos**):
+
+- [`ipe-core-fim.openapi.yaml`](./ipe-core-fim.openapi.yaml)
+
+Importe no [Swagger Editor](https://editor.swagger.io/) ou em qualquer cliente OpenAPI 3. Exemplos de auth usam o placeholder `opc_…`.
+
 Base: `https://api.admin.opcore.com.br`
 
 Token (sem expiração; válido até revogar ou rotacionar):
