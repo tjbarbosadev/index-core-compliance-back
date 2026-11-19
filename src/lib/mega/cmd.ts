@@ -1,4 +1,5 @@
 import { execFile } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
 import { mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -20,8 +21,19 @@ export class MegaError extends Error {
 const execFileAsync = promisify(execFile);
 const HANDLE_RE = /\b(H:[A-Za-z0-9_-]+)\b/;
 const TEMP_PREFIX = 'opcore-mega-';
+/** Sessão MEGAcmd perdida / expirada — força novo login no próximo ensureMegaLogin. */
+const SESSION_LOST_RE =
+  /not logged|login required|please log|session.*expir|not authenticated|unauthori[sz]ed/i;
+/** Nó/arquivo remoto inexistente (mega-rm / ls / get). */
+const NODE_NOT_FOUND_RE =
+  /no such file|doesn't exist|does not exist|couldn't find|could not find|not found|unknown (file|node|handle)|invalid (file|node|handle)/i;
 
 let loginPromise: Promise<void> | null = null;
+
+/** @internal testes — limpa cache de login. */
+export function resetMegaLoginCache(): void {
+  loginPromise = null;
+}
 
 export function parseMegaLsHandle(listing: string, fileName: string): string | null {
   const lines = listing.split('\n');
@@ -41,6 +53,16 @@ function megaCommand(bin: string, args: string[]): { file: string; args: string[
   return { file: command, args };
 }
 
+function isBinaryMissing(error: unknown, detail: string): boolean {
+  const code = (error as NodeJS.ErrnoException | undefined)?.code;
+  if (code === 'ENOENT') return true;
+  return /mega-\w+[^\n]*not found|ENOENT/i.test(detail) && !NODE_NOT_FOUND_RE.test(detail);
+}
+
+function isNodeNotFoundDetail(detail: string): boolean {
+  return NODE_NOT_FOUND_RE.test(detail);
+}
+
 async function runMega(bin: string, args: string[], timeout = 180000): Promise<string> {
   const command = megaCommand(bin, args);
   try {
@@ -51,12 +73,20 @@ async function runMega(bin: string, args: string[], timeout = 180000): Promise<s
     });
     return `${stdout}${stderr}`.trim();
   } catch (error) {
-    const err = error as { stderr?: string; stdout?: string; message?: string };
+    const err = error as { stderr?: string; stdout?: string; message?: string; code?: string };
     const detail = (err.stderr || err.stdout || err.message || 'MEGAcmd failed').trim();
-    if (/not found|ENOENT/i.test(detail)) {
+
+    if (bin !== 'whoami' && SESSION_LOST_RE.test(detail)) {
+      loginPromise = null;
+    }
+
+    if (isBinaryMissing(error, detail)) {
       throw new MegaError(503, 'MEGAcmd não está disponível neste ambiente');
     }
-    throw new MegaError(502, 'Falha ao falar com o MEGAcmd');
+
+    // Preserve stderr snippet so callers (megaRm) can detect node-not-found.
+    const snippet = detail.replace(/\s+/g, ' ').slice(0, 240);
+    throw new MegaError(502, snippet || 'Falha ao falar com o MEGAcmd');
   }
 }
 
@@ -117,15 +147,20 @@ async function withUploadFile(
 ): Promise<void> {
   const dir = await mkdtemp(join(tmpdir(), TEMP_PREFIX));
   const localPath = join(dir, fileName);
-  await writeFile(localPath, buffer);
-  const remoteDir = `/tmp/${TEMP_PREFIX}${Date.now()}`;
+  const remoteDir = `/tmp/${TEMP_PREFIX}${randomUUID()}`;
   const remoteTmp = `${remoteDir}/${fileName}`;
   try {
+    await writeFile(localPath, buffer);
     if (env.megacmdContainer) {
-      await execFileAsync('docker', ['exec', env.megacmdContainer, 'mkdir', '-p', remoteDir]);
-      await execFileAsync('docker', ['cp', localPath, `${env.megacmdContainer}:${remoteTmp}`]);
-      await run(remoteTmp);
-      await execFileAsync('docker', ['exec', env.megacmdContainer, 'rm', '-rf', remoteDir]);
+      try {
+        await execFileAsync('docker', ['exec', env.megacmdContainer, 'mkdir', '-p', remoteDir]);
+        await execFileAsync('docker', ['cp', localPath, `${env.megacmdContainer}:${remoteTmp}`]);
+        await run(remoteTmp);
+      } finally {
+        await execFileAsync('docker', ['exec', env.megacmdContainer, 'rm', '-rf', remoteDir]).catch(
+          () => undefined,
+        );
+      }
       return;
     }
     await run(localPath);
@@ -162,8 +197,11 @@ export async function megaRm(handle: string): Promise<void> {
   await ensureMegaLogin();
   try {
     await runMega('rm', ['-r', '-f', handle]);
-  } catch {
-    // already gone
+  } catch (error) {
+    if (error instanceof MegaError && error.status === 502 && isNodeNotFoundDetail(error.message)) {
+      return;
+    }
+    throw error;
   }
 }
 
@@ -192,7 +230,7 @@ export async function downloadBufferWithMegacmd(megaId: string): Promise<Buffer>
   const dir = await mkdtemp(join(tmpdir(), `${TEMP_PREFIX}dl-`));
   try {
     if (env.megacmdContainer) {
-      const remoteDir = `/tmp/${TEMP_PREFIX}dl-${Date.now()}`;
+      const remoteDir = `/tmp/${TEMP_PREFIX}dl-${randomUUID()}`;
       await execFileAsync('docker', ['exec', env.megacmdContainer, 'mkdir', '-p', remoteDir]);
       try {
         await runMega('get', [megaId, remoteDir]);
