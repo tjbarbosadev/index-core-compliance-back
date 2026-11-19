@@ -482,7 +482,8 @@ components:
           type: string
         amountBrl:
           type: number
-          exclusiveMinimum: 0
+          minimum: 0
+          exclusiveMinimum: true
           multipleOf: 0.01
         externalId:
           type: string
@@ -515,7 +516,8 @@ components:
           type: string
         amountBrl:
           type: number
-          exclusiveMinimum: 0
+          minimum: 0
+          exclusiveMinimum: true
           multipleOf: 0.01
         externalId:
           type: string
