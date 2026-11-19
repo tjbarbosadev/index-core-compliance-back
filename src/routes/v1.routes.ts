@@ -8,6 +8,7 @@ import {
 import * as cotistaService from '../services/cotista.service.js';
 import * as fundService from '../services/fund.service.js';
 import { registerFimPartnerRoutes } from './fim-partner.routes.js';
+import { registerFimPartnerDocumentRoutes } from './fim-partner-documents.routes.js';
 import { getVisualizationDate, toYYYYMMDD } from '../services/quota-calculator.js';
 
 type PartnerRequest = Request & { partner?: AuthenticatedPartner };
@@ -135,6 +136,7 @@ function positionIdQuery(req: Request): string | undefined {
 
 export function registerV1Routes(app: Express) {
   registerFimPartnerRoutes(app, { requirePartner, logPartnerAccess });
+  registerFimPartnerDocumentRoutes(app, { requirePartner, logPartnerAccess });
 
   app.get(
     '/v1/fundos',
