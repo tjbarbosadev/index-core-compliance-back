@@ -3,6 +3,10 @@ import {
   hashPartnerToken,
   generatePartnerToken,
   checkPartnerRateLimit,
+  normalizePartnerScopes,
+  FIM_PARTNER_SCOPES,
+  FIM_SCOPE_DOCUMENTS_WRITE,
+  FIM_SCOPE_DOCUMENTS_READ,
   _clearRateBucketsForTests,
 } from './partner.service.js';
 
@@ -30,5 +34,29 @@ describe('partner.service', () => {
     const blocked = checkPartnerRateLimit(id, 3);
     expect(blocked.ok).toBe(false);
     expect(blocked.retryAfterSec).toBeGreaterThan(0);
+  });
+
+  describe('normalizePartnerScopes', () => {
+    it('exposes document scopes in FIM_PARTNER_SCOPES', () => {
+      expect(FIM_SCOPE_DOCUMENTS_WRITE).toBe('fim.documents.write');
+      expect(FIM_SCOPE_DOCUMENTS_READ).toBe('fim.documents.read');
+      expect(FIM_PARTNER_SCOPES).toContain('fim.documents.write');
+      expect(FIM_PARTNER_SCOPES).toContain('fim.documents.read');
+    });
+
+    it('accepts document scopes', () => {
+      expect(normalizePartnerScopes(['fim.documents.write'])).toEqual(['fim.documents.write']);
+      expect(normalizePartnerScopes(['fim.documents.read', ' fim.documents.write '])).toEqual([
+        'fim.documents.read',
+        'fim.documents.write',
+      ]);
+    });
+
+    it('rejects unknown scopes', () => {
+      expect(() => normalizePartnerScopes(['fim.documents.delete'])).toThrow('Escopo desconhecido');
+      expect(() => normalizePartnerScopes(['fim.documents.write', 'bogus'])).toThrow(
+        'Escopo desconhecido',
+      );
+    });
   });
 });

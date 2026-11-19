@@ -444,6 +444,7 @@ model Party {
   partyFundLinks     PartyFundLink[]
   onboardingProcesses OnboardingProcess[]
   kycReports         KycReport[]
+  partnerDocuments   PartnerDocument[]
 
   @@index([status, expiresAt])
   @@index([cpfCnpj])
@@ -508,6 +509,7 @@ model Cotista {
   createdAt         DateTime         @default(now()) @map("created_at") @db.Timestamptz
 
   party Party @relation(fields: [partyId], references: [id], onDelete: Cascade)
+  partnerDocuments PartnerDocument[]
 
   @@map("cotistas")
 }
@@ -979,6 +981,7 @@ model ApiPartner {
   requestLogs      ApiPartnerRequestLog[]
   fimSubscriptions FimSubscription[]
   fimRedemptions   FimRedemption[]
+  partnerDocuments PartnerDocument[]
 
   @@index([tokenHash])
   @@index([previousTokenHash])
@@ -1000,6 +1003,30 @@ model ApiPartnerRequestLog {
 
   @@index([partnerId, createdAt(sort: Desc)])
   @@map("api_partner_request_logs")
+}
+
+model PartnerDocument {
+  id           String   @id @default(uuid()) @db.Uuid
+  partnerId    String   @map("partner_id") @db.Uuid
+  partyId      String   @map("party_id") @db.Uuid
+  cotistaId    String   @map("cotista_id") @db.Uuid
+  label        String?  @db.VarChar(120)
+  originalName String   @map("original_name") @db.VarChar(255)
+  mimeType     String   @map("mime_type") @db.VarChar(100)
+  size         Int
+  sha256       String   @db.VarChar(64)
+  megaId       String   @map("mega_id") @db.VarChar(128)
+  megaPath     String   @map("mega_path") @db.VarChar(1024)
+  createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz
+
+  partner ApiPartner @relation(fields: [partnerId], references: [id], onDelete: Cascade)
+  party   Party      @relation(fields: [partyId], references: [id], onDelete: Cascade)
+  cotista Cotista    @relation(fields: [cotistaId], references: [id], onDelete: Cascade)
+
+  @@unique([partnerId, partyId, sha256])
+  @@index([partnerId, partyId])
+  @@index([cotistaId])
+  @@map("partner_documents")
 }
 
 // ============================================================================
